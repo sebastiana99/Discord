@@ -235,7 +235,7 @@ function createHelpEmbed() {
       },
     ],
     footer: {
-      text: 'Ultron | PlayStation Trophy Assistant',
+      text: 'Ultron | PlayStation Trophy Assistant | Made by Sebastian A.',
     },
     timestamp: new Date().toISOString(),
   };
