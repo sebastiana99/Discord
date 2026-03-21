@@ -21,6 +21,20 @@ const POWERPYX_BASE_URL = 'https://www.powerpyx.com';
 const TROPHY_CACHE_TTL_MS = 10 * 60 * 1000;
 const TROPHY_RETRY_DELAYS_MS = [2500, 5000];
 const trophyCache = new Map();
+const HUNTER_RANKS = [
+  { name: 'Novice Hunter', min: 0, max: 50 },
+  { name: 'Rising Hunter', min: 51, max: 100 },
+  { name: 'Adept Hunter', min: 101, max: 200 },
+  { name: 'Elite Hunter', min: 201, max: 300 },
+  { name: 'Master Hunter', min: 301, max: 400 },
+  { name: 'Grandmaster Hunter', min: 401, max: 500 },
+  { name: 'Veteran Hunter', min: 501, max: 600 },
+  { name: 'Legendary Hunter', min: 601, max: 700 },
+  { name: 'Mythic Hunter', min: 701, max: 800 },
+  { name: 'Platinum Overlord', min: 801, max: 900 },
+  { name: 'Ultimate Hunter', min: 901, max: 999 },
+  { name: 'Platinum God', min: 1000, max: Infinity },
+];
 
 async function getBrowser() {
   if (!browserPromise) {
@@ -87,6 +101,48 @@ function parseLatestTrophy(html) {
       gameImage: getImageUrl(gameImageEl, $),
       rarity,
     };
+  }
+
+  return null;
+}
+
+function extractPsnUsername(input) {
+  if (!input) {
+    return null;
+  }
+
+  const trimmed = input.trim();
+
+  if (!trimmed) {
+    return null;
+  }
+
+  const match = trimmed.match(/psnprofiles\.com\/([^/?#]+)/i);
+  const rawUsername = match ? match[1] : trimmed;
+
+  return rawUsername.replace(/^@/, '').trim();
+}
+
+function parsePlatinumCount(html) {
+  const $ = cheerio.load(html);
+  const bodyText = normalizeText($('body').text());
+  const regexes = [
+    /Platinums?\s*([\d,]+)/i,
+    /([\d,]+)\s*Platinums?/i,
+  ];
+
+  for (const regex of regexes) {
+    const match = bodyText.match(regex);
+
+    if (!match) {
+      continue;
+    }
+
+    const count = Number.parseInt(match[1].replace(/,/g, ''), 10);
+
+    if (!Number.isNaN(count)) {
+      return count;
+    }
   }
 
   return null;
@@ -169,10 +225,116 @@ async function fetchLatestTrophy(username) {
       return { kind: 'blocked', status, title };
     }
 
+    if (!trophy) {
+      return { kind: 'parse_error' };
+    }
+  } finally {
+    await context.close();
+  }
+}
+
+async function fetchPsnProfileSummary(username) {
+  const browser = await getBrowser();
+  const context = await browser.newContext({
+    userAgent:
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+    viewport: { width: 1440, height: 900 },
+    locale: 'en-US',
+    extraHTTPHeaders: {
+      Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+      'Accept-Language': 'en-US,en;q=0.9',
+      'Upgrade-Insecure-Requests': '1',
+    },
+  });
+
+  await context.addInitScript(() => {
+    Object.defineProperty(navigator, 'webdriver', {
+      get: () => undefined,
+    });
+
+    Object.defineProperty(navigator, 'languages', {
+      get: () => ['en-US', 'en'],
+    });
+
+    Object.defineProperty(navigator, 'platform', {
+      get: () => 'Win32',
+    });
+  });
+
+  const page = await context.newPage();
+  const url = buildProfileUrl(username);
+
+  try {
+    const response = await page.goto(url, {
+      waitUntil: 'domcontentloaded',
+      timeout: 30000,
+    });
+
+    if (!response) {
+      throw new Error('No response received from PSNProfiles profile.');
+    }
+
+    const status = response.status();
+
+    if (status === 404) {
+      return { kind: 'not_found' };
+    }
+
+    if (status >= 400) {
+      return { kind: 'blocked', status };
+    }
+
+    await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => null);
+    await page.waitForTimeout(3000);
+
+    const title = await page.title();
+    const html = await page.content();
+    const platinumCount = parsePlatinumCount(html);
+
+    if (platinumCount !== null) {
+      return {
+        kind: 'success',
+        profile: {
+          username,
+          platinumCount,
+        },
+      };
+    }
+
+    const challengeDetected =
+      /just a moment|attention required|access denied|security check/i.test(title) ||
+      /cf-browser-verification|cf-challenge|challenge-platform|turnstile|captcha/i.test(html);
+
+    if (challengeDetected) {
+      return { kind: 'blocked', status, title };
+    }
+
     return { kind: 'parse_error' };
   } finally {
     await context.close();
   }
+}
+
+async function fetchPsnProfileSummaryWithRetry(username) {
+  let lastResult = null;
+
+  for (let attempt = 0; attempt <= TROPHY_RETRY_DELAYS_MS.length; attempt += 1) {
+    const result = await fetchPsnProfileSummary(username);
+    lastResult = result;
+
+    if (result.kind === 'success' || result.kind === 'not_found' || result.kind === 'parse_error') {
+      return result;
+    }
+
+    if (result.kind === 'blocked' && attempt < TROPHY_RETRY_DELAYS_MS.length) {
+      await delay(TROPHY_RETRY_DELAYS_MS[attempt]);
+      continue;
+    }
+
+    return result;
+  }
+
+  return lastResult || { kind: 'parse_error' };
 }
 
 function getCachedTrophy(username) {
@@ -243,6 +405,41 @@ function buildCardUrl(username) {
   return `${PSN_CARD_BASE_URL}/${encodeURIComponent(username)}.png`;
 }
 
+function getHunterRank(platinumCount) {
+  return HUNTER_RANKS.find((rank) => platinumCount >= rank.min && platinumCount <= rank.max) || null;
+}
+
+async function assignHunterRank(member, platinumCount) {
+  const guildRoles = member.guild.roles.cache;
+  const targetRank = getHunterRank(platinumCount);
+
+  if (!targetRank) {
+    throw new Error(`No hunter rank found for ${platinumCount} platinums.`);
+  }
+
+  const targetRole = guildRoles.find((role) => role.name === targetRank.name);
+
+  if (!targetRole) {
+    throw new Error(`Role "${targetRank.name}" was not found in this server.`);
+  }
+
+  const rankRoles = HUNTER_RANKS
+    .map((rank) => guildRoles.find((role) => role.name === rank.name))
+    .filter(Boolean);
+
+  const rolesToRemove = rankRoles.filter((role) => role.id !== targetRole.id && member.roles.cache.has(role.id));
+
+  if (rolesToRemove.length > 0) {
+    await member.roles.remove(rolesToRemove, 'Updating PSN hunter rank');
+  }
+
+  if (!member.roles.cache.has(targetRole.id)) {
+    await member.roles.add(targetRole, 'Assigned PSN hunter rank');
+  }
+
+  return targetRank;
+}
+
 function createBaseEmbed(username, title) {
   return {
     color: EMBED_COLOR,
@@ -288,7 +485,7 @@ function createTrophyFallbackEmbed(username, reason) {
 function createHelpEmbed() {
   return {
     color: EMBED_COLOR,
-    title: 'Ultron Commands',
+    title: 'Jarvis Commands',
     description: 'Trophy lookups, profile cards, and guide searches for PlayStation hunters.',
     fields: [
       {
@@ -326,9 +523,14 @@ function createHelpEmbed() {
         value: 'Finds the best matching PSNProfiles guide.',
         inline: false,
       },
+      {
+        name: '!registerpsn <username or link>',
+        value: 'Checks your PSNProfiles account and assigns your hunter rank role automatically.',
+        inline: false,
+      },
     ],
     footer: {
-      text: 'Ultron | PlayStation Trophy Assistant',
+      text: 'Jarvis | PlayStation Trophy Assistant | Made for No BS Trophy Hunting |',
     },
     timestamp: new Date().toISOString(),
   };
@@ -576,6 +778,84 @@ client.on('messageCreate', async (message) => {
         },
       ],
     });
+  }
+
+  if (command === '!registerpsn') {
+    const input = args.slice(1).join(' ');
+    const username = extractPsnUsername(input);
+
+    if (!username) {
+      return message.reply('Use: !registerpsn <psnprofiles-username-or-link>');
+    }
+
+    if (!message.guild || !message.member) {
+      return message.reply('This command only works inside a server.');
+    }
+
+    try {
+      const result = await fetchPsnProfileSummaryWithRetry(username);
+
+      if (result.kind === 'not_found') {
+        return message.reply(`PSNProfiles user \`${username}\` was not found.`);
+      }
+
+      if (result.kind === 'blocked') {
+        console.error(`PSNProfiles profile blocked for ${username}. Status: ${result.status}. Title: ${result.title || 'Unknown'}`);
+        return message.reply('PSNProfiles blocked the profile check right now. Please try again in a moment.');
+      }
+
+      if (result.kind === 'parse_error') {
+        return message.reply('I found the profile, but could not read the platinum count.');
+      }
+
+      const member = await message.guild.members.fetch(message.author.id);
+      const rank = await assignHunterRank(member, result.profile.platinumCount);
+
+      return message.reply({
+        embeds: [
+          {
+            color: EMBED_COLOR,
+            title: 'Hunter Rank Updated',
+            url: buildProfileUrl(result.profile.username),
+            description: `Jarvis checked **${result.profile.username}** and updated your hunter rank.`,
+            fields: [
+              {
+                name: 'PSNProfiles',
+                value: `[Open profile](${buildProfileUrl(result.profile.username)})`,
+                inline: false,
+              },
+              {
+                name: 'Platinums',
+                value: String(result.profile.platinumCount),
+                inline: true,
+              },
+              {
+                name: 'Assigned Role',
+                value: rank.name,
+                inline: true,
+              },
+            ],
+            thumbnail: { url: buildCardUrl(result.profile.username) },
+            footer: {
+              text: 'Jarvis | Automatic Hunter Rank',
+            },
+            timestamp: new Date().toISOString(),
+          },
+        ],
+      });
+    } catch (error) {
+      if (
+        error.message.includes('Role "') ||
+        error.message.includes('Missing Permissions') ||
+        error.message.includes('Missing Access')
+      ) {
+        console.error('Role assignment failed:', error.message);
+        return message.reply('I could read the profile, but I could not assign the hunter rank role. Please check that all hunter roles exist and that Jarvis can manage them.');
+      }
+
+      console.error('Error registering PSN profile:', error.message);
+      return message.reply('Something went wrong while checking your PSNProfiles account. Please try again.');
+    }
   }
 
   if (command === '!guide') {
