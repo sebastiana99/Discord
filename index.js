@@ -18,6 +18,9 @@ const EMBED_COLOR = 0x0070d1;
 const PSNPROFILES_BASE_URL = 'https://psnprofiles.com';
 const PSN_CARD_BASE_URL = 'https://card.psnprofiles.com/1';
 const POWERPYX_BASE_URL = 'https://www.powerpyx.com';
+const TROPHY_CACHE_TTL_MS = 10 * 60 * 1000;
+const TROPHY_RETRY_DELAYS_MS = [2500, 5000];
+const trophyCache = new Map();
 
 async function getBrowser() {
   if (!browserPromise) {
@@ -34,6 +37,10 @@ async function getBrowser() {
   }
 
   return browserPromise;
+}
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function getImageUrl(element, $) {
@@ -168,6 +175,62 @@ async function fetchLatestTrophy(username) {
   }
 }
 
+function getCachedTrophy(username) {
+  const key = username.toLowerCase();
+  const cached = trophyCache.get(key);
+
+  if (!cached) {
+    return null;
+  }
+
+  if (Date.now() - cached.cachedAt > TROPHY_CACHE_TTL_MS) {
+    trophyCache.delete(key);
+    return null;
+  }
+
+  return cached.trophy;
+}
+
+function setCachedTrophy(username, trophy) {
+  trophyCache.set(username.toLowerCase(), {
+    trophy,
+    cachedAt: Date.now(),
+  });
+}
+
+async function fetchLatestTrophyWithRetry(username) {
+  const cachedTrophy = getCachedTrophy(username);
+
+  if (cachedTrophy) {
+    return { kind: 'success', trophy: cachedTrophy, source: 'cache' };
+  }
+
+  let lastResult = null;
+
+  for (let attempt = 0; attempt <= TROPHY_RETRY_DELAYS_MS.length; attempt += 1) {
+    const result = await fetchLatestTrophy(username);
+    lastResult = result;
+
+    if (result.kind === 'success') {
+      setCachedTrophy(username, result.trophy);
+      return { ...result, source: attempt === 0 ? 'live' : 'retry' };
+    }
+
+    if (result.kind === 'not_found' || result.kind === 'parse_error') {
+      return result;
+    }
+
+    if (result.kind === 'blocked' && attempt < TROPHY_RETRY_DELAYS_MS.length) {
+      await delay(TROPHY_RETRY_DELAYS_MS[attempt]);
+      continue;
+    }
+
+    return result;
+  }
+
+  return lastResult || { kind: 'parse_error' };
+}
+
 function buildProfileUrl(username) {
   return `${PSNPROFILES_BASE_URL}/${encodeURIComponent(username)}`;
 }
@@ -189,6 +252,36 @@ function createBaseEmbed(username, title) {
       text: `PSNProfiles | ${username}`,
     },
     timestamp: new Date().toISOString(),
+  };
+}
+
+function createTrophyFallbackEmbed(username, reason) {
+  const description =
+    reason === 'blocked'
+      ? 'PSNProfiles is blocking the automated lookup right now, but you can still open the profile and trophy log below.'
+      : 'I could not read the latest trophy entry right now, but the profile and trophy log links are still here.';
+
+  return {
+    ...createBaseEmbed(username, `${username}'s Trophy Links`),
+    description,
+    fields: [
+      {
+        name: 'Profile',
+        value: `[Open profile](${buildProfileUrl(username)})`,
+        inline: true,
+      },
+      {
+        name: 'Trophy Log',
+        value: `[Open trophy log](${buildLogUrl(username)})`,
+        inline: true,
+      },
+      {
+        name: 'PSN Card',
+        value: `[Open card image](${buildCardUrl(username)})`,
+        inline: false,
+      },
+    ],
+    image: { url: buildCardUrl(username) },
   };
 }
 
@@ -235,7 +328,7 @@ function createHelpEmbed() {
       },
     ],
     footer: {
-      text: 'Ultron | PlayStation Trophy Assistant | Made by Sebastian A.',
+      text: 'Ultron | PlayStation Trophy Assistant',
     },
     timestamp: new Date().toISOString(),
   };
@@ -669,7 +762,7 @@ client.on('messageCreate', async (message) => {
     }
 
     try {
-      const result = await fetchLatestTrophy(username);
+      const result = await fetchLatestTrophyWithRetry(username);
 
       if (result.kind === 'not_found') {
         return message.reply(`PSNProfiles user \`${username}\` was not found.`);
@@ -677,14 +770,26 @@ client.on('messageCreate', async (message) => {
 
       if (result.kind === 'blocked') {
         console.error(`PSNProfiles challenge page for ${username}. Status: ${result.status}. Title: ${result.title || 'Unknown'}`);
-        return message.reply('PSNProfiles blocked the request right now. Please try again in a moment.');
+        return message.reply({
+          content: 'PSNProfiles blocked the request right now, so I could not fetch the latest trophy automatically.',
+          embeds: [createTrophyFallbackEmbed(username, 'blocked')],
+        });
       }
 
       if (result.kind === 'parse_error') {
-        return message.reply('I found the profile, but could not read the latest trophy entry.');
+        return message.reply({
+          content: 'I found the profile, but could not read the latest trophy entry.',
+          embeds: [createTrophyFallbackEmbed(username, 'parse_error')],
+        });
       }
 
       const { trophy } = result;
+      const fetchedFrom =
+        result.source === 'cache'
+          ? 'Cached result'
+          : result.source === 'retry'
+            ? 'Fetched after retry'
+            : 'Live result';
 
       return message.reply({
         embeds: [
@@ -711,6 +816,11 @@ client.on('messageCreate', async (message) => {
                 name: 'Profile',
                 value: `[Open trophy log](${buildLogUrl(username)})`,
                 inline: false,
+              },
+              {
+                name: 'Source',
+                value: fetchedFrom,
+                inline: true,
               },
             ],
             thumbnail: trophy.trophyIcon ? { url: trophy.trophyIcon } : undefined,
