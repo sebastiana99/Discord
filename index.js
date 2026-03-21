@@ -27,6 +27,8 @@ async function getBrowser() {
         '--disable-blink-features=AutomationControlled',
         '--no-first-run',
         '--disable-dev-shm-usage',
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
       ],
     });
   }
@@ -160,9 +162,7 @@ async function fetchLatestTrophy(username) {
       return { kind: 'blocked', status, title };
     }
 
-    if (!trophy) {
-      return { kind: 'parse_error' };
-    }
+    return { kind: 'parse_error' };
   } finally {
     await context.close();
   }
@@ -722,6 +722,15 @@ client.on('messageCreate', async (message) => {
       if (error.message.includes('Executable doesn\'t exist')) {
         console.error('Playwright browser is missing. Run: npx playwright install chromium');
         return message.reply('The bot still needs its browser installed. Run `npx playwright install chromium` in the project folder first.');
+      }
+
+      if (
+        error.message.includes('sandbox') ||
+        error.message.includes('Target page, context or browser has been closed') ||
+        error.message.includes('Failed to launch')
+      ) {
+        console.error('Hosted browser launch failed:', error.message);
+        return message.reply('The hosted browser failed to start. Redeploy the bot, then try again.');
       }
 
       console.error('Error fetching trophy data:', error.message);
