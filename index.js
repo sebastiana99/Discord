@@ -16,7 +16,7 @@ const client = new Client({
 let browserPromise;
 const EMBED_COLOR = 0x0070d1;
 const PSNPROFILES_BASE_URL = 'https://psnprofiles.com';
-const PSN_CARD_BASE_URL = 'https://card.psnprofiles.com/2';
+const PSN_CARD_BASE_URL = 'https://card.psnprofiles.com/1';
 const POWERPYX_BASE_URL = 'https://www.powerpyx.com';
 
 async function getBrowser() {
