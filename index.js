@@ -208,7 +208,7 @@ function parseTrophyLevelFromText(text) {
 
     const count = Number.parseInt(match[1].replace(/,/g, ''), 10);
 
-    if (!Number.isNaN(count)) {
+    if (!Number.isNaN(count) && count >= 1 && count <= 9999) {
       return count;
     }
   }
@@ -1556,8 +1556,4 @@ client.login(process.env.DISCORD_TOKEN);
 process.on('SIGINT', async () => {
   if (browserPromise) {
     const browser = await browserPromise.catch(() => null);
-    await browser?.close();
-  }
-
-  process.exit(0);
-});
+    await browser?.close(
