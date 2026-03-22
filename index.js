@@ -1,5 +1,8 @@
 require('dotenv').config();
 
+console.log('Jarvis booting...');
+console.log('DISCORD_TOKEN present:', Boolean(process.env.DISCORD_TOKEN));
+
 const fs = require('fs');
 const path = require('path');
 const axios = require('axios');
@@ -1533,4 +1536,28 @@ client.on('messageCreate', async (message) => {
       return message.reply('Error fetching user. Check the username and try again.');
     }
   }
+});
+
+if (!process.env.DISCORD_TOKEN) {
+  console.error('Missing DISCORD_TOKEN environment variable.');
+  process.exit(1);
+}
+
+process.on('unhandledRejection', (error) => {
+  console.error('Unhandled rejection:', error);
+});
+
+process.on('uncaughtException', (error) => {
+  console.error('Uncaught exception:', error);
+});
+
+client.login(process.env.DISCORD_TOKEN);
+
+process.on('SIGINT', async () => {
+  if (browserPromise) {
+    const browser = await browserPromise.catch(() => null);
+    await browser?.close();
+  }
+
+  process.exit(0);
 });
