@@ -666,16 +666,18 @@ function isAdminMember(member) {
   return ADMIN_ROLE_IDS.some((roleId) => member.roles.cache.has(roleId));
 }
 
-function saveUserPsnRegistration(member, username, platinumCount) {
+function saveUserPsnRegistration(member, username, platinumCount, trophyLevel = null) {
   psnRegistrations[member.id] = {
     discordTag: member.user.tag,
     username,
     platinumCount,
+    trophyLevel,
     updatedAt: new Date().toISOString(),
   };
   setCachedProfileSummary(username, {
     username,
     platinumCount,
+    trophyLevel,
   });
 
   savePsnRegistrations();
@@ -1079,13 +1081,15 @@ client.on('messageCreate', async (message) => {
 
       if (
         savedRegistration &&
-        savedRegistration.username.toLowerCase() === username.toLowerCase()
+        savedRegistration.username.toLowerCase() === username.toLowerCase() &&
+        (savedRegistration.platinumCount !== null || savedRegistration.trophyLevel !== null)
       ) {
         result = {
           kind: 'success',
           profile: {
             username: savedRegistration.username,
             platinumCount: savedRegistration.platinumCount,
+            trophyLevel: savedRegistration.trophyLevel ?? null,
           },
           source: 'saved',
         };
@@ -1106,8 +1110,18 @@ client.on('messageCreate', async (message) => {
         return message.reply('I found the profile, but could not read the platinum count.');
       }
 
-      const rank = await assignHunterRank(member, result.profile.platinumCount);
-      saveUserPsnRegistration(member, result.profile.username, result.profile.platinumCount);
+      let rank = null;
+
+      if (result.profile.platinumCount !== null && result.profile.platinumCount !== undefined) {
+        rank = await assignHunterRank(member, result.profile.platinumCount);
+      }
+
+      saveUserPsnRegistration(
+        member,
+        result.profile.username,
+        result.profile.platinumCount ?? null,
+        result.profile.trophyLevel ?? null
+      );
       const fetchedFrom =
         result.source === 'saved'
           ? 'Saved registration'
@@ -1143,7 +1157,7 @@ client.on('messageCreate', async (message) => {
               },
               {
                 name: 'Assigned Role',
-                value: rank.name,
+                value: rank ? rank.name : 'Not assigned',
                 inline: true,
               },
               {
@@ -1211,7 +1225,7 @@ client.on('messageCreate', async (message) => {
       const lines = entries
         .sort(([, a], [, b]) => a.username.localeCompare(b.username))
         .slice(0, 20)
-        .map(([userId, saved]) => `<@${userId}> -> **${saved.username}** (${saved.platinumCount} plats)`);
+        .map(([userId, saved]) => `<@${userId}> -> **${saved.username}** (${formatRegistrationStat(saved.platinumCount, '?')} plats, level ${formatRegistrationStat(saved.trophyLevel, '?')})`);
 
       return message.reply({
         embeds: [
@@ -1251,7 +1265,12 @@ client.on('messageCreate', async (message) => {
             },
             {
               name: 'Last Saved Platinum Count',
-              value: String(saved.platinumCount),
+              value: formatRegistrationStat(saved.platinumCount),
+              inline: true,
+            },
+            {
+              name: 'Last Saved Trophy Level',
+              value: formatRegistrationStat(saved.trophyLevel),
               inline: true,
             },
             {
