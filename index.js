@@ -20,6 +20,7 @@ const EMBED_COLOR = 0x0070d1;
 const PSNPROFILES_BASE_URL = 'https://psnprofiles.com';
 const PSN_CARD_BASE_URL = 'https://card.psnprofiles.com/1';
 const POWERPYX_BASE_URL = 'https://www.powerpyx.com';
+const PSN_PLATHUB_BASE_URL = 'https://www.psnplathub.com';
 const TROPHY_CACHE_TTL_MS = 10 * 60 * 1000;
 const PROFILE_CACHE_TTL_MS = 60 * 60 * 1000;
 const TROPHY_RETRY_DELAYS_MS = [2500, 5000];
@@ -189,6 +190,45 @@ function parsePlatinumCount(html) {
   return null;
 }
 
+function parseTrophyLevelFromText(text) {
+  const regexes = [
+    /Trophy\s*Level\s*([\d,]+)/i,
+    /Level\s*([\d,]+)\s*(?:Trophies|Profile|PSN)?/i,
+  ];
+
+  for (const regex of regexes) {
+    const match = text.match(regex);
+
+    if (!match) {
+      continue;
+    }
+
+    const count = Number.parseInt(match[1].replace(/,/g, ''), 10);
+
+    if (!Number.isNaN(count)) {
+      return count;
+    }
+  }
+
+  return null;
+}
+
+function parsePsnPlatHubSummary(html) {
+  const $ = cheerio.load(html);
+  const bodyText = normalizeText($('body').text());
+  const platinumCount = parsePlatinumCount(html);
+  const trophyLevel = parseTrophyLevelFromText(bodyText);
+
+  if (platinumCount === null && trophyLevel === null) {
+    return null;
+  }
+
+  return {
+    platinumCount,
+    trophyLevel,
+  };
+}
+
 async function fetchLatestTrophy(username) {
   const browser = await getBrowser();
   const context = await browser.newContext({
@@ -356,6 +396,89 @@ async function fetchPsnProfileSummary(username) {
   }
 }
 
+async function fetchPsnPlatHubSummary(username) {
+  const browser = await getBrowser();
+  const context = await browser.newContext({
+    userAgent:
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+    viewport: { width: 1440, height: 900 },
+    locale: 'en-US',
+    extraHTTPHeaders: {
+      Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+      'Accept-Language': 'en-US,en;q=0.9',
+      'Upgrade-Insecure-Requests': '1',
+    },
+  });
+
+  await context.addInitScript(() => {
+    Object.defineProperty(navigator, 'webdriver', {
+      get: () => undefined,
+    });
+  });
+
+  const page = await context.newPage();
+  const url = `${PSN_PLATHUB_BASE_URL}/mosaic?psnId=${encodeURIComponent(username)}`;
+
+  try {
+    const response = await page.goto(url, {
+      waitUntil: 'domcontentloaded',
+      timeout: 30000,
+    });
+
+    if (!response) {
+      throw new Error('No response received from PSN PlatHub.');
+    }
+
+    const status = response.status();
+
+    if (status === 404) {
+      return { kind: 'not_found' };
+    }
+
+    if (status >= 400) {
+      return { kind: 'blocked', status };
+    }
+
+    await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => null);
+    await page.waitForTimeout(3000);
+
+    const html = await page.content();
+    const title = await page.title();
+    const summary = parsePsnPlatHubSummary(html);
+
+    if (summary && (summary.platinumCount !== null || summary.trophyLevel !== null)) {
+      return {
+        kind: 'success',
+        profile: {
+          username,
+          platinumCount: summary.platinumCount,
+          trophyLevel: summary.trophyLevel,
+        },
+      };
+    }
+
+    const bodyText = await page.locator('body').innerText().catch(() => '');
+    const bodyLower = bodyText.toLowerCase();
+
+    if (
+      /rate limit|too many requests|temporarily unavailable|please try again later/i.test(bodyText) ||
+      /captcha|access denied|just a moment|attention required/i.test(title)
+    ) {
+      return { kind: 'blocked', status, title };
+    }
+
+    if (
+      /no profile found|could not find|error has occurred|updated profile on psnprofiles/i.test(bodyLower)
+    ) {
+      return { kind: 'not_found' };
+    }
+
+    return { kind: 'parse_error' };
+  } finally {
+    await context.close();
+  }
+}
+
 async function fetchPsnProfileSummaryWithRetry(username) {
   const cachedProfile = getCachedProfileSummary(username);
 
@@ -366,24 +489,74 @@ async function fetchPsnProfileSummaryWithRetry(username) {
   let lastResult = null;
 
   for (let attempt = 0; attempt <= TROPHY_RETRY_DELAYS_MS.length; attempt += 1) {
-    const result = await fetchPsnProfileSummary(username);
-    lastResult = result;
+    const platHubResult = await fetchPsnPlatHubSummary(username);
+    lastResult = platHubResult;
 
-    if (result.kind === 'success') {
-      setCachedProfileSummary(username, result.profile);
-      return { ...result, source: attempt === 0 ? 'live' : 'retry' };
+    if (platHubResult.kind === 'success') {
+      setCachedProfileSummary(username, platHubResult.profile);
+      return {
+        ...platHubResult,
+        provider: 'psnplathub',
+        source: attempt === 0 ? 'live' : 'retry',
+      };
     }
 
-    if (result.kind === 'not_found' || result.kind === 'parse_error') {
-      return result;
+    if (platHubResult.kind === 'not_found') {
+      const fallbackResult = await fetchPsnProfileSummary(username);
+      lastResult = fallbackResult;
+
+      if (fallbackResult.kind === 'success') {
+        setCachedProfileSummary(username, fallbackResult.profile);
+        return {
+          ...fallbackResult,
+          provider: 'psnprofiles',
+          source: attempt === 0 ? 'live' : 'retry',
+        };
+      }
+
+      if (fallbackResult.kind === 'not_found' || fallbackResult.kind === 'parse_error') {
+        return fallbackResult;
+      }
+
+      if (fallbackResult.kind === 'blocked' && attempt < TROPHY_RETRY_DELAYS_MS.length) {
+        await delay(TROPHY_RETRY_DELAYS_MS[attempt]);
+        continue;
+      }
+
+      return fallbackResult;
     }
 
-    if (result.kind === 'blocked' && attempt < TROPHY_RETRY_DELAYS_MS.length) {
+    if (platHubResult.kind === 'parse_error') {
+      const fallbackResult = await fetchPsnProfileSummary(username);
+      lastResult = fallbackResult;
+
+      if (fallbackResult.kind === 'success') {
+        setCachedProfileSummary(username, fallbackResult.profile);
+        return {
+          ...fallbackResult,
+          provider: 'psnprofiles',
+          source: attempt === 0 ? 'live' : 'retry',
+        };
+      }
+
+      if (fallbackResult.kind === 'not_found' || fallbackResult.kind === 'parse_error') {
+        return fallbackResult;
+      }
+
+      if (fallbackResult.kind === 'blocked' && attempt < TROPHY_RETRY_DELAYS_MS.length) {
+        await delay(TROPHY_RETRY_DELAYS_MS[attempt]);
+        continue;
+      }
+
+      return fallbackResult;
+    }
+
+    if (platHubResult.kind === 'blocked' && attempt < TROPHY_RETRY_DELAYS_MS.length) {
       await delay(TROPHY_RETRY_DELAYS_MS[attempt]);
       continue;
     }
 
-    return result;
+    return platHubResult;
   }
 
   return lastResult || { kind: 'parse_error' };
@@ -934,6 +1107,12 @@ client.on('messageCreate', async (message) => {
             : result.source === 'retry'
               ? 'Fetched after retry'
               : 'Live profile';
+      const providerLabel =
+        result.provider === 'psnplathub'
+          ? 'PSN PlatHub'
+          : result.provider === 'psnprofiles'
+            ? 'PSNProfiles'
+            : 'Saved data';
 
       return message.reply({
         embeds: [
@@ -966,6 +1145,11 @@ client.on('messageCreate', async (message) => {
               {
                 name: 'Source',
                 value: fetchedFrom,
+                inline: true,
+              },
+              {
+                name: 'Provider',
+                value: providerLabel,
                 inline: true,
               },
             ],
