@@ -26,7 +26,8 @@ const TROPHY_RETRY_DELAYS_MS = [2500, 5000];
 const trophyCache = new Map();
 const profileCache = new Map();
 const ADMIN_ROLE_IDS = ['1482453535550341250', '1484271731618091133'];
-const PSN_REGISTRATIONS_FILE = path.join(__dirname, 'psn-registrations.json');
+const DATA_DIR = process.env.RAILWAY_VOLUME_MOUNT_PATH || path.join(__dirname, 'data');
+const PSN_REGISTRATIONS_FILE = path.join(DATA_DIR, 'psn-registrations.json');
 const HUNTER_RANKS = [
   { name: 'Novice Hunter', min: 0, max: 50 },
   { name: 'Rising Hunter', min: 51, max: 100 },
@@ -43,8 +44,18 @@ const HUNTER_RANKS = [
 ];
 let psnRegistrations = loadPsnRegistrations();
 
+function ensureDataDirectory() {
+  try {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+  } catch (error) {
+    console.error('Failed to create data directory:', error.message);
+  }
+}
+
 function loadPsnRegistrations() {
   try {
+    ensureDataDirectory();
+
     if (!fs.existsSync(PSN_REGISTRATIONS_FILE)) {
       return {};
     }
@@ -59,6 +70,7 @@ function loadPsnRegistrations() {
 
 function savePsnRegistrations() {
   try {
+    ensureDataDirectory();
     fs.writeFileSync(PSN_REGISTRATIONS_FILE, JSON.stringify(psnRegistrations, null, 2));
   } catch (error) {
     console.error('Failed to save psn registrations:', error.message);
