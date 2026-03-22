@@ -447,6 +447,9 @@ async function fetchPsnPlatHubSummary(username) {
 
     const html = await page.content();
     const title = await page.title();
+    const bodyText = await page.locator('body').innerText().catch(() => '');
+    console.log('PSN PlatHub title:', title);
+    console.log('PSN PlatHub text snippet:', bodyText.replace(/\s+/g, ' ').slice(0, 1200));
     const summary = parsePsnPlatHubSummary(html);
 
     if (summary && (summary.platinumCount !== null || summary.trophyLevel !== null)) {
@@ -460,7 +463,6 @@ async function fetchPsnPlatHubSummary(username) {
       };
     }
 
-    const bodyText = await page.locator('body').innerText().catch(() => '');
     const bodyLower = bodyText.toLowerCase();
 
     if (
@@ -1554,10 +1556,4 @@ process.on('uncaughtException', (error) => {
 client.login(process.env.DISCORD_TOKEN);
 
 process.on('SIGINT', async () => {
-  if (browserPromise) {
-    const browser = await browserPromise.catch(() => null);
-    await browser?.close();
-  }
-
-  process.exit(0);
-});
+  
