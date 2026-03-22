@@ -23,7 +23,7 @@ const POWERPYX_BASE_URL = 'https://www.powerpyx.com';
 const TROPHY_CACHE_TTL_MS = 10 * 60 * 1000;
 const TROPHY_RETRY_DELAYS_MS = [2500, 5000];
 const trophyCache = new Map();
-const ADMIN_ROLE_IDS = ['1482453535550341250'];
+const ADMIN_ROLE_IDS = ['1482453535550341250', '1484271731618091133'];
 const PSN_REGISTRATIONS_FILE = path.join(__dirname, 'psn-registrations.json');
 const HUNTER_RANKS = [
   { name: 'Novice Hunter', min: 0, max: 50 },
