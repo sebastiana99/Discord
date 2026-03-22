@@ -219,6 +219,19 @@ function parseTrophyLevelFromText(text) {
 function parsePsnPlatHubSummary(html) {
   const $ = cheerio.load(html);
   const bodyText = normalizeText($('body').text());
+  const compactMatch = bodyText.match(/LEVEL\s+(\d{1,4})\s+(\d{1,5})\s+(\d{1,5})\s+(\d{1,5})\s+(\d{1,5})\s+(\d{1,6})/i);
+
+  if (compactMatch) {
+    return {
+      trophyLevel: Number.parseInt(compactMatch[1], 10),
+      platinumCount: Number.parseInt(compactMatch[2], 10),
+      goldCount: Number.parseInt(compactMatch[3], 10),
+      silverCount: Number.parseInt(compactMatch[4], 10),
+      bronzeCount: Number.parseInt(compactMatch[5], 10),
+      totalTrophies: Number.parseInt(compactMatch[6], 10),
+    };
+  }
+
   const platinumCount = parsePlatinumCount(html);
   const trophyLevel = parseTrophyLevelFromText(bodyText);
 
@@ -1559,26 +1572,4 @@ client.on('messageCreate', async (message) => {
   }
 });
 
-if (!process.env.DISCORD_TOKEN) {
-  console.error('Missing DISCORD_TOKEN environment variable.');
-  process.exit(1);
-}
-
-process.on('unhandledRejection', (error) => {
-  console.error('Unhandled rejection:', error);
-});
-
-process.on('uncaughtException', (error) => {
-  console.error('Uncaught exception:', error);
-});
-
-client.login(process.env.DISCORD_TOKEN);
-
-process.on('SIGINT', async () => {
-  if (browserPromise) {
-    const browser = await browserPromise.catch(() => null);
-    await browser?.close();
-  }
-
-  process.exit(0);
-});
+if (!process.env.DIS
