@@ -21,8 +21,10 @@ const PSNPROFILES_BASE_URL = 'https://psnprofiles.com';
 const PSN_CARD_BASE_URL = 'https://card.psnprofiles.com/1';
 const POWERPYX_BASE_URL = 'https://www.powerpyx.com';
 const TROPHY_CACHE_TTL_MS = 10 * 60 * 1000;
+const PROFILE_CACHE_TTL_MS = 60 * 60 * 1000;
 const TROPHY_RETRY_DELAYS_MS = [2500, 5000];
 const trophyCache = new Map();
+const profileCache = new Map();
 const ADMIN_ROLE_IDS = ['1482453535550341250', '1484271731618091133'];
 const PSN_REGISTRATIONS_FILE = path.join(__dirname, 'psn-registrations.json');
 const HUNTER_RANKS = [
@@ -343,13 +345,24 @@ async function fetchPsnProfileSummary(username) {
 }
 
 async function fetchPsnProfileSummaryWithRetry(username) {
+  const cachedProfile = getCachedProfileSummary(username);
+
+  if (cachedProfile) {
+    return { kind: 'success', profile: cachedProfile, source: 'cache' };
+  }
+
   let lastResult = null;
 
   for (let attempt = 0; attempt <= TROPHY_RETRY_DELAYS_MS.length; attempt += 1) {
     const result = await fetchPsnProfileSummary(username);
     lastResult = result;
 
-    if (result.kind === 'success' || result.kind === 'not_found' || result.kind === 'parse_error') {
+    if (result.kind === 'success') {
+      setCachedProfileSummary(username, result.profile);
+      return { ...result, source: attempt === 0 ? 'live' : 'retry' };
+    }
+
+    if (result.kind === 'not_found' || result.kind === 'parse_error') {
       return result;
     }
 
@@ -378,6 +391,29 @@ function getCachedTrophy(username) {
   }
 
   return cached.trophy;
+}
+
+function getCachedProfileSummary(username) {
+  const key = username.toLowerCase();
+  const cached = profileCache.get(key);
+
+  if (!cached) {
+    return null;
+  }
+
+  if (Date.now() - cached.cachedAt > PROFILE_CACHE_TTL_MS) {
+    profileCache.delete(key);
+    return null;
+  }
+
+  return cached.profile;
+}
+
+function setCachedProfileSummary(username, profile) {
+  profileCache.set(username.toLowerCase(), {
+    profile,
+    cachedAt: Date.now(),
+  });
 }
 
 function setCachedTrophy(username, trophy) {
@@ -447,6 +483,10 @@ function saveUserPsnRegistration(member, username, platinumCount) {
     platinumCount,
     updatedAt: new Date().toISOString(),
   };
+  setCachedProfileSummary(username, {
+    username,
+    platinumCount,
+  });
 
   savePsnRegistrations();
 }
@@ -839,7 +879,25 @@ client.on('messageCreate', async (message) => {
     }
 
     try {
-      const result = await fetchPsnProfileSummaryWithRetry(username);
+      const member = await message.guild.members.fetch(message.author.id);
+      const savedRegistration = psnRegistrations[member.id];
+      let result;
+
+      if (
+        savedRegistration &&
+        savedRegistration.username.toLowerCase() === username.toLowerCase()
+      ) {
+        result = {
+          kind: 'success',
+          profile: {
+            username: savedRegistration.username,
+            platinumCount: savedRegistration.platinumCount,
+          },
+          source: 'saved',
+        };
+      } else {
+        result = await fetchPsnProfileSummaryWithRetry(username);
+      }
 
       if (result.kind === 'not_found') {
         return message.reply(`PSNProfiles user \`${username}\` was not found.`);
@@ -854,9 +912,16 @@ client.on('messageCreate', async (message) => {
         return message.reply('I found the profile, but could not read the platinum count.');
       }
 
-      const member = await message.guild.members.fetch(message.author.id);
       const rank = await assignHunterRank(member, result.profile.platinumCount);
       saveUserPsnRegistration(member, result.profile.username, result.profile.platinumCount);
+      const fetchedFrom =
+        result.source === 'saved'
+          ? 'Saved registration'
+          : result.source === 'cache'
+            ? 'Cached profile'
+            : result.source === 'retry'
+              ? 'Fetched after retry'
+              : 'Live profile';
 
       return message.reply({
         embeds: [
@@ -884,6 +949,11 @@ client.on('messageCreate', async (message) => {
               {
                 name: 'Saved',
                 value: 'Yes',
+                inline: true,
+              },
+              {
+                name: 'Source',
+                value: fetchedFrom,
                 inline: true,
               },
             ],
@@ -919,7 +989,37 @@ client.on('messageCreate', async (message) => {
       return message.reply('You do not have permission to use this command.');
     }
 
-    const target = message.mentions.users.first() || message.author;
+    const target = message.mentions.users.first();
+
+    if (!target) {
+      const entries = Object.entries(psnRegistrations);
+
+      if (entries.length === 0) {
+        return message.reply('No PSNProfiles registrations have been saved yet.');
+      }
+
+      const lines = entries
+        .sort(([, a], [, b]) => a.username.localeCompare(b.username))
+        .slice(0, 20)
+        .map(([userId, saved]) => `<@${userId}> -> **${saved.username}** (${saved.platinumCount} plats)`);
+
+      return message.reply({
+        embeds: [
+          {
+            color: EMBED_COLOR,
+            title: 'Saved PSN Registrations',
+            description: lines.join('\n'),
+            footer: {
+              text: entries.length > 20
+                ? `Jarvis | Showing 20 of ${entries.length} saved registrations`
+                : `Jarvis | ${entries.length} saved registrations`,
+            },
+            timestamp: new Date().toISOString(),
+          },
+        ],
+      });
+    }
+
     const saved = psnRegistrations[target.id];
 
     if (!saved) {
