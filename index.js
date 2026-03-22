@@ -676,6 +676,10 @@ function saveUserPsnRegistration(member, username, platinumCount) {
   savePsnRegistrations();
 }
 
+function formatRegistrationStat(value, fallback = 'Not available') {
+  return value === null || value === undefined ? fallback : String(value);
+}
+
 function getHunterRank(platinumCount) {
   return HUNTER_RANKS.find((rank) => platinumCount >= rank.min && platinumCount <= rank.max) || null;
 }
@@ -1129,12 +1133,17 @@ client.on('messageCreate', async (message) => {
               },
               {
                 name: 'Platinums',
-                value: String(result.profile.platinumCount),
+                value: formatRegistrationStat(result.profile.platinumCount),
                 inline: true,
               },
               {
                 name: 'Assigned Role',
                 value: rank.name,
+                inline: true,
+              },
+              {
+                name: 'Trophy Level',
+                value: formatRegistrationStat(result.profile.trophyLevel),
                 inline: true,
               },
               {
@@ -1524,20 +1533,4 @@ client.on('messageCreate', async (message) => {
       return message.reply('Error fetching user. Check the username and try again.');
     }
   }
-});
-
-if (!process.env.DISCORD_TOKEN) {
-  console.error('Missing DISCORD_TOKEN environment variable.');
-  process.exit(1);
-}
-
-client.login(process.env.DISCORD_TOKEN);
-
-process.on('SIGINT', async () => {
-  if (browserPromise) {
-    const browser = await browserPromise.catch(() => null);
-    await browser?.close();
-  }
-
-  process.exit(0);
 });
