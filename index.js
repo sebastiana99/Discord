@@ -1556,4 +1556,10 @@ process.on('uncaughtException', (error) => {
 client.login(process.env.DISCORD_TOKEN);
 
 process.on('SIGINT', async () => {
-  
+  if (browserPromise) {
+    const browser = await browserPromise.catch(() => null);
+    await browser?.close();
+  }
+
+  process.exit(0);
+});
