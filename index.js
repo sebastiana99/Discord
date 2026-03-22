@@ -262,7 +262,7 @@ async function fetchPsnProfileSummary(username) {
   });
 
   const page = await context.newPage();
-  const url = buildProfileUrl(username);
+  const url = buildLogUrl(username);
 
   try {
     const response = await page.goto(url, {
