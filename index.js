@@ -1,5 +1,7 @@
 require('dotenv').config();
 
+const fs = require('fs');
+const path = require('path');
 const axios = require('axios');
 const { Client, GatewayIntentBits } = require('discord.js');
 const cheerio = require('cheerio');
@@ -21,6 +23,8 @@ const POWERPYX_BASE_URL = 'https://www.powerpyx.com';
 const TROPHY_CACHE_TTL_MS = 10 * 60 * 1000;
 const TROPHY_RETRY_DELAYS_MS = [2500, 5000];
 const trophyCache = new Map();
+const ADMIN_ROLE_IDS = ['1482453535550341250'];
+const PSN_REGISTRATIONS_FILE = path.join(__dirname, 'psn-registrations.json');
 const HUNTER_RANKS = [
   { name: 'Novice Hunter', min: 0, max: 50 },
   { name: 'Rising Hunter', min: 51, max: 100 },
@@ -35,6 +39,29 @@ const HUNTER_RANKS = [
   { name: 'Ultimate Hunter', min: 901, max: 999 },
   { name: 'Platinum God', min: 1000, max: Infinity },
 ];
+let psnRegistrations = loadPsnRegistrations();
+
+function loadPsnRegistrations() {
+  try {
+    if (!fs.existsSync(PSN_REGISTRATIONS_FILE)) {
+      return {};
+    }
+
+    const raw = fs.readFileSync(PSN_REGISTRATIONS_FILE, 'utf8');
+    return raw ? JSON.parse(raw) : {};
+  } catch (error) {
+    console.error('Failed to load psn registrations:', error.message);
+    return {};
+  }
+}
+
+function savePsnRegistrations() {
+  try {
+    fs.writeFileSync(PSN_REGISTRATIONS_FILE, JSON.stringify(psnRegistrations, null, 2));
+  } catch (error) {
+    console.error('Failed to save psn registrations:', error.message);
+  }
+}
 
 async function getBrowser() {
   if (!browserPromise) {
@@ -403,6 +430,25 @@ function buildLogUrl(username) {
 
 function buildCardUrl(username) {
   return `${PSN_CARD_BASE_URL}/${encodeURIComponent(username)}.png`;
+}
+
+function isAdminMember(member) {
+  if (!member) {
+    return false;
+  }
+
+  return ADMIN_ROLE_IDS.some((roleId) => member.roles.cache.has(roleId));
+}
+
+function saveUserPsnRegistration(member, username, platinumCount) {
+  psnRegistrations[member.id] = {
+    discordTag: member.user.tag,
+    username,
+    platinumCount,
+    updatedAt: new Date().toISOString(),
+  };
+
+  savePsnRegistrations();
 }
 
 function getHunterRank(platinumCount) {
@@ -810,6 +856,7 @@ client.on('messageCreate', async (message) => {
 
       const member = await message.guild.members.fetch(message.author.id);
       const rank = await assignHunterRank(member, result.profile.platinumCount);
+      saveUserPsnRegistration(member, result.profile.username, result.profile.platinumCount);
 
       return message.reply({
         embeds: [
@@ -834,6 +881,11 @@ client.on('messageCreate', async (message) => {
                 value: rank.name,
                 inline: true,
               },
+              {
+                name: 'Saved',
+                value: 'Yes',
+                inline: true,
+              },
             ],
             thumbnail: { url: buildCardUrl(result.profile.username) },
             footer: {
@@ -856,6 +908,55 @@ client.on('messageCreate', async (message) => {
       console.error('Error registering PSN profile:', error.message);
       return message.reply('Something went wrong while checking your PSNProfiles account. Please try again.');
     }
+  }
+
+  if (command === '!whoisregistered') {
+    if (!message.guild || !message.member) {
+      return message.reply('This command only works inside a server.');
+    }
+
+    if (!isAdminMember(message.member)) {
+      return message.reply('You do not have permission to use this command.');
+    }
+
+    const target = message.mentions.users.first() || message.author;
+    const saved = psnRegistrations[target.id];
+
+    if (!saved) {
+      return message.reply(`No saved PSNProfiles registration was found for **${target.tag}**.`);
+    }
+
+    return message.reply({
+      embeds: [
+        {
+          color: EMBED_COLOR,
+          title: 'Saved PSN Registration',
+          url: buildProfileUrl(saved.username),
+          description: `Jarvis has stored a PSNProfiles registration for **${target.tag}**.`,
+          fields: [
+            {
+              name: 'PSN Username',
+              value: saved.username,
+              inline: true,
+            },
+            {
+              name: 'Last Saved Platinum Count',
+              value: String(saved.platinumCount),
+              inline: true,
+            },
+            {
+              name: 'Updated At',
+              value: saved.updatedAt,
+              inline: false,
+            },
+          ],
+          footer: {
+            text: 'Jarvis | Admin Registration Check',
+          },
+          timestamp: new Date().toISOString(),
+        },
+      ],
+    });
   }
 
   if (command === '!guide') {
