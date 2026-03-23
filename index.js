@@ -30,6 +30,7 @@ const TROPHY_RETRY_DELAYS_MS = [2500, 5000];
 const trophyCache = new Map();
 const profileCache = new Map();
 const ADMIN_ROLE_IDS = ['1482453535550341250', '1484271731618091133'];
+const MEMBER_ROLE_ID = '1482450530247770305';
 const DATA_DIR = process.env.RAILWAY_VOLUME_MOUNT_PATH || path.join(__dirname, 'data');
 const PSN_REGISTRATIONS_FILE = path.join(DATA_DIR, 'psn-registrations.json');
 const HUNTER_RANKS = [
@@ -1375,8 +1376,15 @@ client.on('messageCreate', async (message) => {
     }
 
     try {
-      const members = message.guild.members.cache;
-      const eligibleMembers = members.filter((member) => !member.user.bot && !isAdminMember(member));
+      const memberRole = message.guild.roles.cache.get(MEMBER_ROLE_ID);
+
+      if (!memberRole) {
+        return message.reply('The base member role for the audit was not found.');
+      }
+
+      const eligibleMembers = memberRole.members.filter(
+        (member) => !member.user.bot && !isAdminMember(member)
+      );
 
       const missingRegistration = [];
       const missingHunterRole = [];
@@ -1409,7 +1417,7 @@ client.on('messageCreate', async (message) => {
           {
             color: EMBED_COLOR,
             title: 'Jarvis Audit Report',
-            description: `Checked **${eligibleMembers.size}** non-staff members.`,
+            description: `Checked **${eligibleMembers.size}** members with the **${memberRole.name}** role.`,
             fields: [
               {
                 name: 'Missing PSN Registration',
