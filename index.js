@@ -575,7 +575,11 @@ async function fetchPsnProfileSummaryWithRetry(username) {
       continue;
     }
 
-    return platHubResult;
+    return {
+      ...platHubResult,
+      provider: 'psnplathub',
+      source: attempt === 0 ? 'live' : 'retry',
+    };
   }
 
   return lastResult || { kind: 'parse_error' };
@@ -1047,7 +1051,7 @@ client.on('messageCreate', async (message) => {
   const command = args[0]?.toLowerCase();
 
   if (command === '!ping') {
-    return message.reply('pong - Jarvis Test V2');
+    return message.reply('Pong - Jarvis Test V3');
   }
 
   if (command === '!help') {
