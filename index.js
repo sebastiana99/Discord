@@ -33,18 +33,18 @@ const ADMIN_ROLE_IDS = ['1482453535550341250', '1484271731618091133'];
 const DATA_DIR = process.env.RAILWAY_VOLUME_MOUNT_PATH || path.join(__dirname, 'data');
 const PSN_REGISTRATIONS_FILE = path.join(DATA_DIR, 'psn-registrations.json');
 const HUNTER_RANKS = [
-  { name: 'Novice Hunter', min: 0, max: 50 },
-  { name: 'Rising Hunter', min: 51, max: 100 },
-  { name: 'Adept Hunter', min: 101, max: 200 },
-  { name: 'Elite Hunter', min: 201, max: 300 },
-  { name: 'Master Hunter', min: 301, max: 400 },
-  { name: 'Grandmaster Hunter', min: 401, max: 500 },
-  { name: 'Veteran Hunter', min: 501, max: 600 },
-  { name: 'Legendary Hunter', min: 601, max: 700 },
-  { name: 'Mythic Hunter', min: 701, max: 800 },
-  { name: 'Platinum Overlord', min: 801, max: 900 },
-  { name: 'Ultimate Hunter', min: 901, max: 999 },
-  { name: 'Platinum God', min: 1000, max: Infinity },
+  { name: 'Novice Hunter', min: 1, max: 99 },
+  { name: 'Rising Hunter', min: 100, max: 199 },
+  { name: 'Adept Hunter', min: 200, max: 299 },
+  { name: 'Elite Hunter', min: 300, max: 399 },
+  { name: 'Master Hunter', min: 400, max: 499 },
+  { name: 'Grandmaster Hunter', min: 500, max: 599 },
+  { name: 'Veteran Hunter', min: 600, max: 699 },
+  { name: 'Legendary Hunter', min: 700, max: 799 },
+  { name: 'Mythic Hunter', min: 800, max: 899 },
+  { name: 'Platinum Overlord', min: 900, max: 949 },
+  { name: 'Ultimate Hunter', min: 950, max: 998 },
+  { name: 'Platinum God', min: 999, max: 999 },
 ];
 let psnRegistrations = loadPsnRegistrations();
 
@@ -676,16 +676,16 @@ function formatRegistrationStat(value, fallback = 'Not available') {
   return value === null || value === undefined ? fallback : String(value);
 }
 
-function getHunterRank(platinumCount) {
-  return HUNTER_RANKS.find((rank) => platinumCount >= rank.min && platinumCount <= rank.max) || null;
+function getHunterRank(trophyLevel) {
+  return HUNTER_RANKS.find((rank) => trophyLevel >= rank.min && trophyLevel <= rank.max) || null;
 }
 
-async function assignHunterRank(member, platinumCount) {
+async function assignHunterRank(member, trophyLevel) {
   const guildRoles = member.guild.roles.cache;
-  const targetRank = getHunterRank(platinumCount);
+  const targetRank = getHunterRank(trophyLevel);
 
   if (!targetRank) {
-    throw new Error(`No hunter rank found for ${platinumCount} platinums.`);
+    throw new Error(`No hunter rank found for trophy level ${trophyLevel}.`);
   }
 
   const targetRole = guildRoles.find((role) => role.name === targetRank.name);
@@ -1169,8 +1169,8 @@ client.on('messageCreate', async (message) => {
 
       let rank = null;
 
-      if (result.profile.platinumCount !== null && result.profile.platinumCount !== undefined) {
-        rank = await assignHunterRank(member, result.profile.platinumCount);
+      if (result.profile.trophyLevel !== null && result.profile.trophyLevel !== undefined) {
+        rank = await assignHunterRank(member, result.profile.trophyLevel);
       }
 
       saveUserPsnRegistration(
@@ -1220,6 +1220,11 @@ client.on('messageCreate', async (message) => {
               {
                 name: 'Trophy Level',
                 value: formatRegistrationStat(result.profile.trophyLevel),
+                inline: true,
+              },
+              {
+                name: 'Rank Basis',
+                value: 'Trophy Level',
                 inline: true,
               },
               {
