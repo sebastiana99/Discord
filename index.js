@@ -229,6 +229,7 @@ function parsePsnPlatHubSummary(html) {
       silverCount: Number.parseInt(compactMatch[4], 10),
       bronzeCount: Number.parseInt(compactMatch[5], 10),
       totalTrophies: Number.parseInt(compactMatch[6], 10),
+      matchedPattern: compactMatch[0],
     };
   }
 
@@ -1192,6 +1193,11 @@ client.on('messageCreate', async (message) => {
                 name: 'Provider',
                 value: providerLabel,
                 inline: true,
+              },
+              {
+                name: 'Debug Pattern',
+                value: result.profile.matchedPattern ? `\`${trimText(result.profile.matchedPattern, 100)}\`` : 'None',
+                inline: false,
               },
             ],
             thumbnail: { url: buildCardUrl(result.profile.username) },
