@@ -13,6 +13,7 @@ const { chromium } = require('playwright');
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMembers,
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent,
   ],
@@ -1382,8 +1383,12 @@ client.on('messageCreate', async (message) => {
         return message.reply('The base member role for the audit was not found.');
       }
 
-      const eligibleMembers = memberRole.members.filter(
-        (member) => !member.user.bot && !isAdminMember(member)
+      const members = await message.guild.members.fetch();
+      const eligibleMembers = members.filter(
+        (member) =>
+          !member.user.bot &&
+          !isAdminMember(member) &&
+          member.roles.cache.has(MEMBER_ROLE_ID)
       );
 
       const missingRegistration = [];
