@@ -688,6 +688,15 @@ function memberHasAnyHunterRole(member) {
   );
 }
 
+function getAuditableMembers(guildMembers) {
+  return guildMembers.filter(
+    (member) =>
+      !member.user.bot &&
+      !isAdminMember(member) &&
+      member.roles.cache.has(MEMBER_ROLE_ID)
+  );
+}
+
 function getHunterRank(trophyLevel) {
   return HUNTER_RANKS.find((rank) => trophyLevel >= rank.min && trophyLevel <= rank.max) || null;
 }
@@ -1384,12 +1393,7 @@ client.on('messageCreate', async (message) => {
       }
 
       const members = await message.guild.members.fetch();
-      const eligibleMembers = members.filter(
-        (member) =>
-          !member.user.bot &&
-          !isAdminMember(member) &&
-          member.roles.cache.has(MEMBER_ROLE_ID)
-      );
+      const eligibleMembers = getAuditableMembers(members);
 
       const missingRegistration = [];
       const missingHunterRole = [];
@@ -1453,6 +1457,41 @@ client.on('messageCreate', async (message) => {
     } catch (error) {
       console.error('Audit command failed:', error.message);
       return message.reply(`Something went wrong while running the audit: ${error.message}`);
+    }
+  }
+
+  if (command === '!remindpsn') {
+    if (!message.guild || !message.member) {
+      return message.reply('This command only works inside a server.');
+    }
+
+    if (!isAdminMember(message.member)) {
+      return message.reply('You do not have permission to use this command.');
+    }
+
+    try {
+      const members = await message.guild.members.fetch();
+      const eligibleMembers = getAuditableMembers(members);
+      const missingRegistration = eligibleMembers.filter((member) => !psnRegistrations[member.id]);
+
+      if (missingRegistration.size === 0) {
+        return message.reply('Everyone who should be registered already has a saved PSN registration.');
+      }
+
+      const mentions = missingRegistration
+        .first(20)
+        .map((member) => member.toString())
+        .join(' ');
+
+      return message.reply({
+        content: `${mentions}\nPlease head to the registration channel and use \`!registerpsn <your username or PSNProfiles link>\` so Jarvis can assign your hunter role automatically.`,
+        allowedMentions: {
+          users: missingRegistration.first(20).map((member) => member.id),
+        },
+      });
+    } catch (error) {
+      console.error('remindpsn command failed:', error.message);
+      return message.reply(`Something went wrong while sending the registration reminder: ${error.message}`);
     }
   }
 
