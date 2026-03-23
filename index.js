@@ -542,7 +542,11 @@ async function fetchPsnProfileSummaryWithRetry(username) {
         continue;
       }
 
-      return fallbackResult;
+      return {
+        ...fallbackResult,
+        provider: 'psnprofiles',
+        source: attempt === 0 ? 'live' : 'retry',
+      };
     }
 
     if (platHubResult.kind === 'parse_error') {
@@ -567,7 +571,11 @@ async function fetchPsnProfileSummaryWithRetry(username) {
         continue;
       }
 
-      return fallbackResult;
+      return {
+        ...fallbackResult,
+        provider: 'psnprofiles',
+        source: attempt === 0 ? 'live' : 'retry',
+      };
     }
 
     if (platHubResult.kind === 'blocked' && attempt < TROPHY_RETRY_DELAYS_MS.length) {
@@ -1051,7 +1059,7 @@ client.on('messageCreate', async (message) => {
   const command = args[0]?.toLowerCase();
 
   if (command === '!ping') {
-    return message.reply('Pong - Jarvis Test V3');
+    return message.reply('Pong - Jarvis Test V4. Really? When will you fix this mess?');
   }
 
   if (command === '!help') {
