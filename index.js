@@ -1117,7 +1117,41 @@ client.on('messageCreate', async (message) => {
       }
 
       if (result.kind === 'parse_error') {
-        return message.reply('I found the profile, but could not read the platinum count.');
+        return message.reply({
+          embeds: [
+            {
+              color: 0xff9900,
+              title: 'Profile Parsed Incompletely',
+              description: `Jarvis reached **${username}** on PSN PlatHub, but could not turn the page into usable profile stats yet.`,
+              fields: [
+                {
+                  name: 'Provider',
+                  value: 'PSN PlatHub',
+                  inline: true,
+                },
+                {
+                  name: 'Platinums',
+                  value: formatRegistrationStat(result.profile?.platinumCount),
+                  inline: true,
+                },
+                {
+                  name: 'Trophy Level',
+                  value: formatRegistrationStat(result.profile?.trophyLevel),
+                  inline: true,
+                },
+                {
+                  name: 'Debug Pattern',
+                  value: result.profile?.matchedPattern ? `\`${trimText(result.profile.matchedPattern, 100)}\`` : 'None',
+                  inline: false,
+                },
+              ],
+              footer: {
+                text: 'Jarvis | Registration Debug',
+              },
+              timestamp: new Date().toISOString(),
+            },
+          ],
+        });
       }
 
       let rank = null;
