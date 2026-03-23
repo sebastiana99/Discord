@@ -1439,7 +1439,7 @@ client.on('messageCreate', async (message) => {
       });
     } catch (error) {
       console.error('Audit command failed:', error.message);
-      return message.reply('Something went wrong while running the audit.');
+      return message.reply(`Something went wrong while running the audit: ${error.message}`);
     }
   }
 
