@@ -502,7 +502,12 @@ async function fetchPsnProfileSummaryWithRetry(username) {
   const cachedProfile = getCachedProfileSummary(username);
 
   if (cachedProfile) {
-    return { kind: 'success', profile: cachedProfile, source: 'cache' };
+    return {
+      kind: 'success',
+      profile: cachedProfile,
+      source: 'cache',
+      provider: 'psnplathub',
+    };
   }
 
   let lastResult = null;
@@ -520,60 +525,10 @@ async function fetchPsnProfileSummaryWithRetry(username) {
       };
     }
 
-    if (platHubResult.kind === 'not_found') {
-      const fallbackResult = await fetchPsnProfileSummary(username);
-      lastResult = fallbackResult;
-
-      if (fallbackResult.kind === 'success') {
-        setCachedProfileSummary(username, fallbackResult.profile);
-        return {
-          ...fallbackResult,
-          provider: 'psnprofiles',
-          source: attempt === 0 ? 'live' : 'retry',
-        };
-      }
-
-      if (fallbackResult.kind === 'not_found' || fallbackResult.kind === 'parse_error') {
-        return fallbackResult;
-      }
-
-      if (fallbackResult.kind === 'blocked' && attempt < TROPHY_RETRY_DELAYS_MS.length) {
-        await delay(TROPHY_RETRY_DELAYS_MS[attempt]);
-        continue;
-      }
-
+    if (platHubResult.kind === 'not_found' || platHubResult.kind === 'parse_error') {
       return {
-        ...fallbackResult,
-        provider: 'psnprofiles',
-        source: attempt === 0 ? 'live' : 'retry',
-      };
-    }
-
-    if (platHubResult.kind === 'parse_error') {
-      const fallbackResult = await fetchPsnProfileSummary(username);
-      lastResult = fallbackResult;
-
-      if (fallbackResult.kind === 'success') {
-        setCachedProfileSummary(username, fallbackResult.profile);
-        return {
-          ...fallbackResult,
-          provider: 'psnprofiles',
-          source: attempt === 0 ? 'live' : 'retry',
-        };
-      }
-
-      if (fallbackResult.kind === 'not_found' || fallbackResult.kind === 'parse_error') {
-        return fallbackResult;
-      }
-
-      if (fallbackResult.kind === 'blocked' && attempt < TROPHY_RETRY_DELAYS_MS.length) {
-        await delay(TROPHY_RETRY_DELAYS_MS[attempt]);
-        continue;
-      }
-
-      return {
-        ...fallbackResult,
-        provider: 'psnprofiles',
+        ...platHubResult,
+        provider: 'psnplathub',
         source: attempt === 0 ? 'live' : 'retry',
       };
     }
@@ -1059,7 +1014,7 @@ client.on('messageCreate', async (message) => {
   const command = args[0]?.toLowerCase();
 
   if (command === '!ping') {
-    return message.reply('Pong - Jarvis Test V4. Really? When will you fix this mess?');
+    return message.reply('pong');
   }
 
   if (command === '!help') {
