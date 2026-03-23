@@ -1375,7 +1375,7 @@ client.on('messageCreate', async (message) => {
     }
 
     try {
-      const members = await message.guild.members.fetch();
+      const members = message.guild.members.cache;
       const eligibleMembers = members.filter((member) => !member.user.bot && !isAdminMember(member));
 
       const missingRegistration = [];
