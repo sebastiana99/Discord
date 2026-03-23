@@ -1047,8 +1047,7 @@ client.on('messageCreate', async (message) => {
   const command = args[0]?.toLowerCase();
 
   if (command === '!ping') {
-  return message.reply('pong - jarvis test v1');
-
+    return message.reply('pong');
   }
 
   if (command === '!help') {
@@ -1117,8 +1116,37 @@ client.on('messageCreate', async (message) => {
       }
 
       if (result.kind === 'blocked') {
-        console.error(`PSNProfiles profile blocked for ${username}. Status: ${result.status}. Title: ${result.title || 'Unknown'}`);
-        return message.reply('PSNProfiles blocked the profile check right now. Please try again in a moment.');
+        console.error(`Profile lookup blocked for ${username}. Provider: ${result.provider || 'unknown'}. Status: ${result.status}. Title: ${result.title || 'Unknown'}`);
+        return message.reply({
+          embeds: [
+            {
+              color: 0xff9900,
+              title: 'Profile Check Blocked',
+              description: `Jarvis could not finish the profile check for **${username}**.`,
+              fields: [
+                {
+                  name: 'Provider',
+                  value: result.provider === 'psnplathub' ? 'PSN PlatHub' : result.provider === 'psnprofiles' ? 'PSNProfiles' : 'Unknown',
+                  inline: true,
+                },
+                {
+                  name: 'Status',
+                  value: String(result.status || 'Unknown'),
+                  inline: true,
+                },
+                {
+                  name: 'Title',
+                  value: result.title || 'Unknown',
+                  inline: false,
+                },
+              ],
+              footer: {
+                text: 'Jarvis | Registration Debug',
+              },
+              timestamp: new Date().toISOString(),
+            },
+          ],
+        });
       }
 
       if (result.kind === 'parse_error') {
