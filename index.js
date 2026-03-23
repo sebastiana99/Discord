@@ -32,6 +32,7 @@ const trophyCache = new Map();
 const profileCache = new Map();
 const ADMIN_ROLE_IDS = ['1482453535550341250', '1484271731618091133'];
 const MEMBER_ROLE_ID = '1482450530247770305';
+const OWNER_USER_ID = '592074887913406486';
 const DATA_DIR = process.env.RAILWAY_VOLUME_MOUNT_PATH || path.join(__dirname, 'data');
 const PSN_REGISTRATIONS_FILE = path.join(DATA_DIR, 'psn-registrations.json');
 const HUNTER_RANKS = [
@@ -153,6 +154,32 @@ function parseLatestTrophy(html) {
   return null;
 }
 
+function parseLatestPlatHubTrophyFromText(bodyText) {
+  const normalizedText = normalizeText(bodyText);
+  const latestPlatIndex = normalizedText.toLowerCase().indexOf('latest platinum card');
+
+  if (latestPlatIndex === -1) {
+    return null;
+  }
+
+  const relevantText = normalizedText.slice(latestPlatIndex);
+  const lines = relevantText.split(/(?=PS[45]\b|PS Vita\b|PS3\b)/i);
+  const gameMatch = relevantText.match(/Latest Platinum Card\s+(.+?)\s+(PS5|PS4|PS3|PS Vita)\b/i);
+
+  if (!gameMatch) {
+    return null;
+  }
+
+  return {
+    trophyName: 'Latest Platinum',
+    gameName: gameMatch[1].trim(),
+    platform: gameMatch[2].trim(),
+    rarity: 'Not available',
+    trophyType: 'Platinum',
+    rawText: relevantText.slice(0, 250),
+  };
+}
+
 function extractPsnUsername(input) {
   if (!input) {
     return null;
@@ -265,18 +292,10 @@ async function fetchLatestTrophy(username) {
     Object.defineProperty(navigator, 'webdriver', {
       get: () => undefined,
     });
-
-    Object.defineProperty(navigator, 'languages', {
-      get: () => ['en-US', 'en'],
-    });
-
-    Object.defineProperty(navigator, 'platform', {
-      get: () => 'Win32',
-    });
   });
 
   const page = await context.newPage();
-  const url = `${PSNPROFILES_BASE_URL}/${encodeURIComponent(username)}/log`;
+  const url = `${PSN_PLATHUB_BASE_URL}/latest-plat?psnId=${encodeURIComponent(username)}`;
 
   try {
     const response = await page.goto(url, {
@@ -285,7 +304,7 @@ async function fetchLatestTrophy(username) {
     });
 
     if (!response) {
-      throw new Error('No response received from PSNProfiles.');
+      throw new Error('No response received from PSN PlatHub latest platinum.');
     }
 
     const status = response.status();
@@ -295,7 +314,7 @@ async function fetchLatestTrophy(username) {
     }
 
     if (status >= 400) {
-      return { kind: 'blocked', status };
+      return { kind: 'blocked', status, provider: 'psnplathub' };
     }
 
     await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => null);
@@ -303,30 +322,34 @@ async function fetchLatestTrophy(username) {
 
     const title = await page.title();
     const html = await page.content();
-    const trophy = parseLatestTrophy(html);
+    const bodyText = await page.locator('body').innerText().catch(() => '');
+    const trophy = parseLatestPlatHubTrophyFromText(bodyText);
+    const imageUrl =
+      (await page.locator('img').first().getAttribute('src').catch(() => null)) || buildCardUrl(username);
 
     if (trophy) {
-      return { kind: 'success', trophy };
+      return {
+        kind: 'success',
+        trophy: {
+          ...trophy,
+          trophyIcon: null,
+          gameImage: imageUrl?.startsWith('http') ? imageUrl : null,
+          latestPlatUrl: url,
+        },
+        provider: 'psnplathub',
+      };
     }
 
-    const challengeDetected =
-      /just a moment|attention required|access denied|security check/i.test(title) ||
-      /cf-browser-verification|cf-challenge|challenge-platform|turnstile|captcha/i.test(html);
-
-    if (challengeDetected) {
-      return { kind: 'blocked', status, title };
+    if (/access denied|too many requests|temporarily unavailable/i.test(bodyText) || /just a moment|attention required/i.test(title)) {
+      return { kind: 'blocked', status, title, provider: 'psnplathub' };
     }
 
-    const bodyText = await page.locator('body').innerText().catch(() => '');
-    const bodyLooksBlocked = /verify you are human|checking your browser|enable javascript|captcha/i.test(bodyText);
-
-    if (bodyLooksBlocked) {
-      return { kind: 'blocked', status, title };
-    }
-
-    if (!trophy) {
-      return { kind: 'parse_error' };
-    }
+    return {
+      kind: 'parse_error',
+      provider: 'psnplathub',
+      textSnippet: bodyText.replace(/\s+/g, ' ').slice(0, 250),
+      latestPlatUrl: url,
+    };
   } finally {
     await context.close();
   }
@@ -676,6 +699,15 @@ function saveUserPsnRegistration(member, username, platinumCount, trophyLevel = 
 
 function formatRegistrationStat(value, fallback = 'Not available') {
   return value === null || value === undefined ? fallback : String(value);
+}
+
+async function notifyOwner(subject, details) {
+  try {
+    const owner = await client.users.fetch(OWNER_USER_ID);
+    await owner.send(`**Jarvis Alert:** ${subject}\n${details}`);
+  } catch (error) {
+    console.error('Failed to send owner alert:', error.message);
+  }
 }
 
 function getHunterRoleNames() {
@@ -1285,10 +1317,18 @@ client.on('messageCreate', async (message) => {
         error.message.includes('Missing Access')
       ) {
         console.error('Role assignment failed:', error.message);
+        await notifyOwner(
+          'Role assignment failed',
+          `User: ${message.author.tag}\nUsername: ${username}\nError: ${error.message}`
+        );
         return message.reply('I could read the profile, but I could not assign the hunter rank role. Please check that all hunter roles exist and that Jarvis can manage them.');
       }
 
       console.error('Error registering PSN profile:', error.message);
+      await notifyOwner(
+        'registerpsn failed',
+        `User: ${message.author.tag}\nUsername: ${username}\nError: ${error.message}`
+      );
       return message.reply('Something went wrong while checking your PSNProfiles account. Please try again.');
     }
   }
@@ -1464,6 +1504,10 @@ client.on('messageCreate', async (message) => {
       });
     } catch (error) {
       console.error('Audit command failed:', error.message);
+      await notifyOwner(
+        'audit failed',
+        `User: ${message.author.tag}\nGuild: ${message.guild.name}\nError: ${error.message}`
+      );
       return message.reply(`Something went wrong while running the audit: ${error.message}`);
     }
   }
@@ -1499,6 +1543,10 @@ client.on('messageCreate', async (message) => {
       });
     } catch (error) {
       console.error('remindpsn command failed:', error.message);
+      await notifyOwner(
+        'remindpsn failed',
+        `User: ${message.author.tag}\nGuild: ${message.guild.name}\nError: ${error.message}`
+      );
       return message.reply(`Something went wrong while sending the registration reminder: ${error.message}`);
     }
   }
@@ -1694,16 +1742,16 @@ client.on('messageCreate', async (message) => {
       }
 
       if (result.kind === 'blocked') {
-        console.error(`PSNProfiles challenge page for ${username}. Status: ${result.status}. Title: ${result.title || 'Unknown'}`);
+        console.error(`Latest platinum lookup blocked for ${username}. Provider: ${result.provider || 'Unknown'}. Status: ${result.status}. Title: ${result.title || 'Unknown'}`);
         return message.reply({
-          content: 'PSNProfiles blocked the request right now, so I could not fetch the latest trophy automatically.',
+          content: 'Jarvis could not fetch the latest platinum right now.',
           embeds: [createTrophyFallbackEmbed(username, 'blocked')],
         });
       }
 
       if (result.kind === 'parse_error') {
         return message.reply({
-          content: 'I found the profile, but could not read the latest trophy entry.',
+          content: 'Jarvis reached the latest platinum page, but could not read the full trophy details yet.',
           embeds: [createTrophyFallbackEmbed(username, 'parse_error')],
         });
       }
@@ -1739,7 +1787,7 @@ client.on('messageCreate', async (message) => {
               },
               {
                 name: 'Profile',
-                value: `[Open trophy log](${buildLogUrl(username)})`,
+                value: `[Open latest platinum page](${trophy.latestPlatUrl || `${PSN_PLATHUB_BASE_URL}/latest-plat?psnId=${encodeURIComponent(username)}`})`,
                 inline: false,
               },
               {
@@ -1781,10 +1829,12 @@ if (!process.env.DISCORD_TOKEN) {
 
 process.on('unhandledRejection', (error) => {
   console.error('Unhandled rejection:', error);
+  void notifyOwner('Unhandled rejection', String(error));
 });
 
 process.on('uncaughtException', (error) => {
   console.error('Uncaught exception:', error);
+  void notifyOwner('Uncaught exception', String(error));
 });
 
 client.login(process.env.DISCORD_TOKEN);
