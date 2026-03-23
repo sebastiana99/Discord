@@ -1047,7 +1047,7 @@ client.on('messageCreate', async (message) => {
   const command = args[0]?.toLowerCase();
 
   if (command === '!ping') {
-    return message.reply('pong');
+    return message.reply('pong - Jarvis Test V2');
   }
 
   if (command === '!help') {
