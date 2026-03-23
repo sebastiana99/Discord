@@ -156,27 +156,21 @@ function parseLatestTrophy(html) {
 
 function parseLatestPlatHubTrophyFromText(bodyText) {
   const normalizedText = normalizeText(bodyText);
-  const latestPlatIndex = normalizedText.toLowerCase().indexOf('latest platinum card');
+  const pattern = /Download\s+([^\s]+)\s+#(\d+)\s+(.+?)\s+(PS5|PS4|PS3|PS Vita)\s+EARNED ON\s+([A-Za-z]{3}\s+\d{1,2},\s+\d{4})/i;
+  const match = normalizedText.match(pattern);
 
-  if (latestPlatIndex === -1) {
-    return null;
-  }
-
-  const relevantText = normalizedText.slice(latestPlatIndex);
-  const lines = relevantText.split(/(?=PS[45]\b|PS Vita\b|PS3\b)/i);
-  const gameMatch = relevantText.match(/Latest Platinum Card\s+(.+?)\s+(PS5|PS4|PS3|PS Vita)\b/i);
-
-  if (!gameMatch) {
+  if (!match) {
     return null;
   }
 
   return {
-    trophyName: 'Latest Platinum',
-    gameName: gameMatch[1].trim(),
-    platform: gameMatch[2].trim(),
+    trophyName: `Latest Platinum (#${match[2]})`,
+    gameName: match[3].trim(),
+    platform: match[4].trim(),
+    earnedDate: match[5].trim(),
     rarity: 'Not available',
     trophyType: 'Platinum',
-    rawText: relevantText.slice(0, 250),
+    rawText: match[0],
   };
 }
 
@@ -1803,8 +1797,18 @@ client.on('messageCreate', async (message) => {
                 inline: true,
               },
               {
+                name: 'Platform',
+                value: trophy.platform || 'Not available',
+                inline: true,
+              },
+              {
                 name: 'Rarity',
                 value: trophy.rarity,
+                inline: true,
+              },
+              {
+                name: 'Earned On',
+                value: trophy.earnedDate || 'Not available',
                 inline: true,
               },
               {
