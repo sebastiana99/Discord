@@ -216,10 +216,9 @@ function parseTrophyLevelFromText(text) {
   return null;
 }
 
-function parsePsnPlatHubSummary(html) {
-  const $ = cheerio.load(html);
-  const bodyText = normalizeText($('body').text());
-  const compactMatch = bodyText.match(/LEVEL\s+(\d{1,4})\s+(\d{1,5})\s+(\d{1,5})\s+(\d{1,5})\s+(\d{1,5})\s+(\d{1,6})/i);
+function parsePsnPlatHubSummaryFromText(bodyText) {
+  const normalizedText = normalizeText(bodyText);
+  const compactMatch = normalizedText.match(/LEVEL\s+(\d{1,4})\s+(\d{1,5})\s+(\d{1,5})\s+(\d{1,5})\s+(\d{1,5})\s+(\d{1,6})/i);
 
   if (compactMatch) {
     return {
@@ -233,8 +232,8 @@ function parsePsnPlatHubSummary(html) {
     };
   }
 
-  const platinumCount = parsePlatinumCount(html);
-  const trophyLevel = parseTrophyLevelFromText(bodyText);
+  const platinumCount = null;
+  const trophyLevel = parseTrophyLevelFromText(normalizedText);
 
   if (platinumCount === null && trophyLevel === null) {
     return null;
@@ -407,7 +406,17 @@ async function fetchPsnProfileSummary(username) {
       return { kind: 'blocked', status, title };
     }
 
-    return { kind: 'parse_error' };
+    return {
+      kind: 'parse_error',
+      provider: 'psnplathub',
+      profile: {
+        username,
+        platinumCount: summary?.platinumCount ?? null,
+        trophyLevel: summary?.trophyLevel ?? null,
+        matchedPattern: summary?.matchedPattern ?? null,
+        textSnippet: bodyText.replace(/\s+/g, ' ').slice(0, 300),
+      },
+    };
   } finally {
     await context.close();
   }
@@ -459,12 +468,11 @@ async function fetchPsnPlatHubSummary(username) {
     await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => null);
     await page.waitForTimeout(3000);
 
-    const html = await page.content();
     const title = await page.title();
     const bodyText = await page.locator('body').innerText().catch(() => '');
     console.log('PSN PlatHub title:', title);
     console.log('PSN PlatHub text snippet:', bodyText.replace(/\s+/g, ' ').slice(0, 1200));
-    const summary = parsePsnPlatHubSummary(html);
+    const summary = parsePsnPlatHubSummaryFromText(bodyText);
 
     if (summary && (summary.platinumCount !== null || summary.trophyLevel !== null)) {
       return {
@@ -1014,11 +1022,9 @@ client.on('messageCreate', async (message) => {
   const command = args[0]?.toLowerCase();
 
   if (command === '!ping') {
-    return message.reply('Seriously? Pong...');
+    return message.reply('pong');
   }
- if (command === '!coffee') {
-   return message.reply('Take a break. Drink some coffee, and come back.');
- }
+
   if (command === '!help') {
     return message.reply({
       embeds: [createHelpEmbed()],
@@ -1144,6 +1150,11 @@ client.on('messageCreate', async (message) => {
                 {
                   name: 'Debug Pattern',
                   value: result.profile?.matchedPattern ? `\`${trimText(result.profile.matchedPattern, 100)}\`` : 'None',
+                  inline: false,
+                },
+                {
+                  name: 'Text Snippet',
+                  value: result.profile?.textSnippet ? `\`${trimText(result.profile.textSnippet, 180)}\`` : 'None',
                   inline: false,
                 },
               ],
