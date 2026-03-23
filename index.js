@@ -1751,8 +1751,30 @@ client.on('messageCreate', async (message) => {
 
       if (result.kind === 'parse_error') {
         return message.reply({
-          content: 'Jarvis reached the latest platinum page, but could not read the full trophy details yet.',
-          embeds: [createTrophyFallbackEmbed(username, 'parse_error')],
+          embeds: [
+            {
+              ...createTrophyFallbackEmbed(username, 'parse_error'),
+              title: 'Latest Platinum Parsed Incompletely',
+              description: 'Jarvis reached the latest platinum page, but could not read the full trophy details yet.',
+              fields: [
+                {
+                  name: 'Provider',
+                  value: 'PSN PlatHub',
+                  inline: true,
+                },
+                {
+                  name: 'Latest Platinum Page',
+                  value: `[Open page](${result.latestPlatUrl || `${PSN_PLATHUB_BASE_URL}/latest-plat?psnId=${encodeURIComponent(username)}`})`,
+                  inline: false,
+                },
+                {
+                  name: 'Text Snippet',
+                  value: result.textSnippet ? `\`${trimText(result.textSnippet, 180)}\`` : 'None',
+                  inline: false,
+                },
+              ],
+            },
+          ],
         });
       }
 
