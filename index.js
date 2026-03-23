@@ -1014,9 +1014,11 @@ client.on('messageCreate', async (message) => {
   const command = args[0]?.toLowerCase();
 
   if (command === '!ping') {
-    return message.reply('pong');
+    return message.reply('Seriously? Pong...');
   }
-
+ if (command === '!coffee') {
+   return message.reply('Take a break. Drink some coffee, and come back.');
+ }
   if (command === '!help') {
     return message.reply({
       embeds: [createHelpEmbed()],
