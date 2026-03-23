@@ -174,6 +174,69 @@ function parseLatestPlatHubTrophyFromText(bodyText) {
   };
 }
 
+function absolutizePlatHubUrl(url) {
+  if (!url) {
+    return null;
+  }
+
+  return url.startsWith('http') ? url : new URL(url, PSN_PLATHUB_BASE_URL).toString();
+}
+
+function parseLatestPlatHubCard(html) {
+  const $ = cheerio.load(html);
+  const card = $('[data-slot="card"]').first();
+
+  if (!card.length) {
+    return null;
+  }
+
+  const username = card.find('span.text-xl.font-bold').first().text().trim() || null;
+  const gameName = card.find('h3').first().text().trim() || null;
+  const platform = card.find('p.text-muted-foreground').first().text().trim() || null;
+  const platinumNumber = card.find('span.text-xs.font-semibold').first().text().trim() || null;
+  const avatarUrl = absolutizePlatHubUrl(card.find(`img[alt="${username}"]`).first().attr('src'));
+  const gameImageEl = card.find('img[alt]').filter((_, element) => {
+    const alt = $(element).attr('alt');
+    return alt && alt !== username && alt !== 'Platinum';
+  }).first();
+  const gameImage = absolutizePlatHubUrl(gameImageEl.attr('src'));
+
+  let earnedDate = null;
+  let rarity = null;
+
+  card.find('div').each((_, element) => {
+    const section = $(element);
+    const label = section.find('span').first().text().trim();
+    const value = section.find('span').last().text().trim();
+
+    if (label === 'Earned On') {
+      earnedDate = value;
+    }
+
+    if (label === 'PSN Rarity') {
+      rarity = value;
+    }
+  });
+
+  if (!gameName || !platform) {
+    return null;
+  }
+
+  return {
+    username,
+    trophyName: gameName,
+    gameName,
+    platinumNumber: platinumNumber || null,
+    platform,
+    earnedDate,
+    rarity: rarity || 'Not available',
+    trophyType: 'Platinum',
+    trophyIcon: avatarUrl,
+    gameImage,
+    matchedPattern: null,
+  };
+}
+
 function extractPsnUsername(input) {
   if (!input) {
     return null;
@@ -317,17 +380,17 @@ async function fetchLatestTrophy(username) {
     const title = await page.title();
     const html = await page.content();
     const bodyText = await page.locator('body').innerText().catch(() => '');
-    const trophy = parseLatestPlatHubTrophyFromText(bodyText);
-    const imageUrl =
-      (await page.locator('img').first().getAttribute('src').catch(() => null)) || buildCardUrl(username);
+    const domTrophy = parseLatestPlatHubCard(html);
+    const textTrophy = parseLatestPlatHubTrophyFromText(bodyText);
+    const trophy = domTrophy || textTrophy;
 
     if (trophy) {
       return {
         kind: 'success',
         trophy: {
           ...trophy,
-          trophyIcon: null,
-          gameImage: imageUrl?.startsWith('http') ? imageUrl : null,
+          trophyIcon: trophy.trophyIcon || null,
+          gameImage: trophy.gameImage || null,
           latestPlatUrl: url,
         },
         provider: 'psnplathub',
@@ -1783,16 +1846,23 @@ client.on('messageCreate', async (message) => {
       return message.reply({
         embeds: [
           {
-            ...createBaseEmbed(username, trophy.trophyName),
-            description: `Latest trophy for **${username}**`,
+            color: EMBED_COLOR,
+            title: trophy.gameName,
+            url: trophy.latestPlatUrl || `${PSN_PLATHUB_BASE_URL}/latest-plat?psnId=${encodeURIComponent(username)}`,
+            author: trophy.trophyIcon
+              ? {
+                  name: username,
+                  icon_url: trophy.trophyIcon,
+                }
+              : {
+                  name: username,
+                },
+            description: trophy.platinumNumber
+              ? `Latest platinum earned by **${username}** (${trophy.platinumNumber})`
+              : `Latest platinum earned by **${username}**`,
             fields: [
               {
-                name: 'Game',
-                value: trophy.gameName,
-                inline: true,
-              },
-              {
-                name: 'Type',
+                name: 'Trophy',
                 value: trophy.trophyType,
                 inline: true,
               },
@@ -1802,8 +1872,8 @@ client.on('messageCreate', async (message) => {
                 inline: true,
               },
               {
-                name: 'Rarity',
-                value: trophy.rarity,
+                name: 'PSN Rarity',
+                value: trophy.rarity || 'Not available',
                 inline: true,
               },
               {
@@ -1811,8 +1881,17 @@ client.on('messageCreate', async (message) => {
                 value: trophy.earnedDate || 'Not available',
                 inline: true,
               },
+              ...(trophy.platinumNumber
+                ? [
+                    {
+                      name: 'Platinum Number',
+                      value: trophy.platinumNumber,
+                      inline: true,
+                    },
+                  ]
+                : []),
               {
-                name: 'Profile',
+                name: 'Latest Platinum Page',
                 value: `[Open latest platinum page](${trophy.latestPlatUrl || `${PSN_PLATHUB_BASE_URL}/latest-plat?psnId=${encodeURIComponent(username)}`})`,
                 inline: false,
               },
@@ -1824,6 +1903,10 @@ client.on('messageCreate', async (message) => {
             ],
             thumbnail: trophy.trophyIcon ? { url: trophy.trophyIcon } : undefined,
             image: trophy.gameImage ? { url: trophy.gameImage } : undefined,
+            footer: {
+              text: `PSN PlatHub | ${username}`,
+            },
+            timestamp: new Date().toISOString(),
           },
         ],
       });
