@@ -867,7 +867,7 @@ function createHelpEmbed() {
   return {
     color: EMBED_COLOR,
     title: 'Jarvis Commands',
-    description: 'Trophy lookups, profile cards, and guide searches for PlayStation hunters.',
+    description: 'PSN registration, latest platinum lookups, staff audits, and guide searches for PlayStation hunters.',
     fields: [
       {
         name: '!ping',
@@ -876,7 +876,7 @@ function createHelpEmbed() {
       },
       {
         name: '!trophy <username>',
-        value: 'Shows the latest trophy earned on PSNProfiles.',
+        value: 'Shows the latest platinum card details from PSN PlatHub.',
         inline: false,
       },
       {
@@ -906,7 +906,22 @@ function createHelpEmbed() {
       },
       {
         name: '!registerpsn <username or link>',
-        value: 'Checks your PSNProfiles account and assigns your hunter rank role automatically.',
+        value: 'Checks your PSN profile through PSN PlatHub and assigns your hunter rank role automatically.',
+        inline: false,
+      },
+      {
+        name: '!whoisregistered [@user]',
+        value: 'Admin only. Shows saved PSN registrations.',
+        inline: false,
+      },
+      {
+        name: '!audit',
+        value: 'Admin only. Checks who is missing PSN registration or a hunter role.',
+        inline: false,
+      },
+      {
+        name: '!remindpsn',
+        value: 'Admin only. Tags members who still need to run `!registerpsn`.',
         inline: false,
       },
     ],
