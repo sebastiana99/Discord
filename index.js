@@ -676,6 +676,16 @@ function formatRegistrationStat(value, fallback = 'Not available') {
   return value === null || value === undefined ? fallback : String(value);
 }
 
+function getHunterRoleNames() {
+  return HUNTER_RANKS.map((rank) => rank.name);
+}
+
+function memberHasAnyHunterRole(member) {
+  return HUNTER_RANKS.some((rank) =>
+    member.roles.cache.some((role) => role.name === rank.name)
+  );
+}
+
 function getHunterRank(trophyLevel) {
   return HUNTER_RANKS.find((rank) => trophyLevel >= rank.min && trophyLevel <= rank.max) || null;
 }
@@ -1353,6 +1363,84 @@ client.on('messageCreate', async (message) => {
         },
       ],
     });
+  }
+
+  if (command === '!audit') {
+    if (!message.guild || !message.member) {
+      return message.reply('This command only works inside a server.');
+    }
+
+    if (!isAdminMember(message.member)) {
+      return message.reply('You do not have permission to use this command.');
+    }
+
+    try {
+      const members = await message.guild.members.fetch();
+      const eligibleMembers = members.filter((member) => !member.user.bot && !isAdminMember(member));
+
+      const missingRegistration = [];
+      const missingHunterRole = [];
+
+      for (const member of eligibleMembers.values()) {
+        const saved = psnRegistrations[member.id];
+
+        if (!saved) {
+          missingRegistration.push(member);
+        }
+
+        if (!memberHasAnyHunterRole(member)) {
+          missingHunterRole.push(member);
+        }
+      }
+
+      const formatMemberList = (list) => {
+        if (list.length === 0) {
+          return 'None';
+        }
+
+        return list
+          .slice(0, 20)
+          .map((member) => member.toString())
+          .join(', ');
+      };
+
+      return message.reply({
+        embeds: [
+          {
+            color: EMBED_COLOR,
+            title: 'Jarvis Audit Report',
+            description: `Checked **${eligibleMembers.size}** non-staff members.`,
+            fields: [
+              {
+                name: 'Missing PSN Registration',
+                value: formatMemberList(missingRegistration),
+                inline: false,
+              },
+              {
+                name: 'Missing Hunter Role',
+                value: formatMemberList(missingHunterRole),
+                inline: false,
+              },
+              {
+                name: 'Hunter Roles Checked',
+                value: getHunterRoleNames().join(', '),
+                inline: false,
+              },
+            ],
+            footer: {
+              text:
+                missingRegistration.length > 20 || missingHunterRole.length > 20
+                  ? 'Jarvis | Lists are capped at 20 members in the embed'
+                  : 'Jarvis | Admin audit',
+            },
+            timestamp: new Date().toISOString(),
+          },
+        ],
+      });
+    } catch (error) {
+      console.error('Audit command failed:', error.message);
+      return message.reply('Something went wrong while running the audit.');
+    }
   }
 
   if (command === '!guide') {
