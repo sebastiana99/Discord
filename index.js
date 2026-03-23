@@ -1149,9 +1149,10 @@ client.on('messageCreate', async (message) => {
         return message.reply({
           embeds: [
             {
-              color: 0xff9900,
-              title: 'Profile Parsed Incompletely',
-              description: `Jarvis reached **${username}** on PSN PlatHub, but could not turn the page into usable profile stats yet.`,
+  color: 0xff9900,
+  title: 'Profile Parsed Incompletely',
+  description: `Jarvis reached **${username}** on PSN PlatHub, but no usable public trophy data was available. Make sure your trophies are synced and visible in your privacy settings, then try again.`,
+
               fields: [
                 {
                   name: 'Provider',
@@ -1415,10 +1416,17 @@ client.on('messageCreate', async (message) => {
           return 'None';
         }
 
-        return list
+        const visibleMembers = list
           .slice(0, 20)
           .map((member) => member.toString())
           .join(', ');
+        const hiddenCount = list.length - 20;
+
+        if (hiddenCount > 0) {
+          return `${visibleMembers}\n+ ${hiddenCount} more not shown`;
+        }
+
+        return visibleMembers;
       };
 
       return message.reply({
