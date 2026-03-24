@@ -815,14 +815,19 @@ async function handleRulesReactionRoleChange(reaction, user, shouldHaveRole) {
   if (shouldHaveRole) {
     if (!member.roles.cache.has(rulesAcceptedRole.id)) {
       await member.roles.add(rulesAcceptedRole, 'Accepted server rules via reaction role');
+      member.roles.cache.set(rulesAcceptedRole.id, rulesAcceptedRole);
     }
 
+    await syncMemberAccessRole(member);
     return;
   }
 
   if (member.roles.cache.has(rulesAcceptedRole.id)) {
     await member.roles.remove(rulesAcceptedRole, 'Removed server rules reaction');
+    member.roles.cache.delete(rulesAcceptedRole.id);
   }
+
+  await syncMemberAccessRole(member);
 }
 
 function getHunterRoleNames() {
@@ -841,6 +846,38 @@ function getRulesAcceptedRole(guild) {
 
 function memberHasRulesAcceptedRole(member) {
   return member.roles.cache.some((role) => role.name === RULES_ACCEPTED_ROLE_NAME);
+}
+
+function getMemberAccessRole(guild) {
+  return guild.roles.cache.get(MEMBER_ROLE_ID) || null;
+}
+
+function memberHasSavedRegistration(member) {
+  const saved = psnRegistrations[member.id];
+  return Boolean(saved && saved.username && (saved.platinumCount !== null || saved.trophyLevel !== null));
+}
+
+async function syncMemberAccessRole(member) {
+  const accessRole = getMemberAccessRole(member.guild);
+
+  if (!accessRole) {
+    throw new Error('The main member access role was not found.');
+  }
+
+  const shouldHaveAccess = memberHasRulesAcceptedRole(member) && memberHasSavedRegistration(member);
+  const hasAccess = member.roles.cache.has(accessRole.id);
+
+  if (shouldHaveAccess && !hasAccess) {
+    await member.roles.add(accessRole, 'Met onboarding requirements via Jarvis');
+    return 'granted';
+  }
+
+  if (!shouldHaveAccess && hasAccess) {
+    await member.roles.remove(accessRole, 'No longer meets onboarding requirements');
+    return 'removed';
+  }
+
+  return 'unchanged';
 }
 
 function getAuditableMembers(guildMembers) {
@@ -1461,6 +1498,7 @@ client.on('messageCreate', async (message) => {
         result.profile.platinumCount ?? null,
         result.profile.trophyLevel ?? null
       );
+      const accessRoleChange = await syncMemberAccessRole(member);
       const fetchedFrom =
         result.source === 'saved'
           ? 'Saved registration'
@@ -1497,6 +1535,16 @@ client.on('messageCreate', async (message) => {
               {
                 name: 'Assigned Role',
                 value: rank ? rank.name : 'Not assigned',
+                inline: true,
+              },
+              {
+                name: 'Server Access',
+                value:
+                  accessRoleChange === 'granted'
+                    ? 'The Assassin Brotherhood granted'
+                    : member.roles.cache.has(MEMBER_ROLE_ID)
+                      ? 'Already granted'
+                      : 'Waiting for Rules Accepted',
                 inline: true,
               },
               {
