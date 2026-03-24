@@ -27,9 +27,11 @@ const POWERPYX_BASE_URL = 'https://www.powerpyx.com';
 const PSN_PLATHUB_BASE_URL = 'https://www.psnplathub.com';
 const TROPHY_CACHE_TTL_MS = 10 * 60 * 1000;
 const PROFILE_CACHE_TTL_MS = 60 * 60 * 1000;
+const AUDIT_MEMBER_CACHE_TTL_MS = 60 * 1000;
 const TROPHY_RETRY_DELAYS_MS = [2500, 5000];
 const trophyCache = new Map();
 const profileCache = new Map();
+const auditMemberCache = new Map();
 const ADMIN_ROLE_IDS = ['1482453535550341250', '1484271731618091133'];
 const MEMBER_ROLE_ID = '1482450530247770305';
 const OWNER_USER_ID = '592074887913406486';
@@ -786,6 +788,66 @@ function getAuditableMembers(guildMembers) {
   );
 }
 
+async function getAuditableMembersForGuild(guild) {
+  const memberRole = guild.roles.cache.get(MEMBER_ROLE_ID);
+
+  if (!memberRole) {
+    throw new Error('The base member role for the audit was not found.');
+  }
+
+  const cachedEntry = auditMemberCache.get(guild.id);
+
+  if (cachedEntry && Date.now() - cachedEntry.cachedAt <= AUDIT_MEMBER_CACHE_TTL_MS) {
+    return {
+      memberRole,
+      eligibleMembers: cachedEntry.members,
+      source: 'memory-cache',
+    };
+  }
+
+  try {
+    const members = await guild.members.fetch();
+    const eligibleMembers = getAuditableMembers(members);
+
+    auditMemberCache.set(guild.id, {
+      members: eligibleMembers,
+      cachedAt: Date.now(),
+    });
+
+    return {
+      memberRole,
+      eligibleMembers,
+      source: 'live-fetch',
+    };
+  } catch (error) {
+    const canUseFallback =
+      error.message.includes('opcode 8 was rate limited') ||
+      error.message.includes('Members didn\'t arrive in time');
+
+    if (!canUseFallback) {
+      throw error;
+    }
+
+    const fallbackMembers =
+      memberRole.members.size > 0 ? getAuditableMembers(memberRole.members) : getAuditableMembers(guild.members.cache);
+
+    if (fallbackMembers.size > 0) {
+      auditMemberCache.set(guild.id, {
+        members: fallbackMembers,
+        cachedAt: Date.now(),
+      });
+
+      return {
+        memberRole,
+        eligibleMembers: fallbackMembers,
+        source: 'role-cache',
+      };
+    }
+
+    throw error;
+  }
+}
+
 function getHunterRank(trophyLevel) {
   return HUNTER_RANKS.find((rank) => trophyLevel >= rank.min && trophyLevel <= rank.max) || null;
 }
@@ -1499,14 +1561,7 @@ client.on('messageCreate', async (message) => {
     }
 
     try {
-      const memberRole = message.guild.roles.cache.get(MEMBER_ROLE_ID);
-
-      if (!memberRole) {
-        return message.reply('The base member role for the audit was not found.');
-      }
-
-      const members = await message.guild.members.fetch();
-      const eligibleMembers = getAuditableMembers(members);
+      const { memberRole, eligibleMembers, source } = await getAuditableMembersForGuild(message.guild);
 
       const missingRegistration = [];
       const missingHunterRole = [];
@@ -1568,7 +1623,9 @@ client.on('messageCreate', async (message) => {
               text:
                 missingRegistration.length > 20 || missingHunterRole.length > 20
                   ? 'Jarvis | Lists are capped at 20 members in the embed'
-                  : 'Jarvis | Admin audit',
+                  : source === 'role-cache' || source === 'memory-cache'
+                    ? 'Jarvis | Admin audit using cached member data'
+                    : 'Jarvis | Admin audit',
             },
             timestamp: new Date().toISOString(),
           },
@@ -1594,8 +1651,7 @@ client.on('messageCreate', async (message) => {
     }
 
     try {
-      const members = await message.guild.members.fetch();
-      const eligibleMembers = getAuditableMembers(members);
+      const { eligibleMembers } = await getAuditableMembersForGuild(message.guild);
       const missingRegistration = eligibleMembers.filter((member) => !psnRegistrations[member.id]);
 
       if (missingRegistration.size === 0) {
