@@ -6,7 +6,7 @@ console.log('DISCORD_TOKEN present:', Boolean(process.env.DISCORD_TOKEN));
 const fs = require('fs');
 const path = require('path');
 const axios = require('axios');
-const { Client, GatewayIntentBits } = require('discord.js');
+const { Client, GatewayIntentBits, Partials } = require('discord.js');
 const cheerio = require('cheerio');
 const { chromium } = require('playwright');
 
@@ -15,7 +15,13 @@ const client = new Client({
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMembers,
     GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.GuildMessageReactions,
     GatewayIntentBits.MessageContent,
+  ],
+  partials: [
+    Partials.Message,
+    Partials.Channel,
+    Partials.Reaction,
   ],
 });
 
@@ -34,6 +40,10 @@ const profileCache = new Map();
 const auditMemberCache = new Map();
 const ADMIN_ROLE_IDS = ['1482453535550341250', '1484271731618091133'];
 const MEMBER_ROLE_ID = '1482450530247770305';
+const RULES_ACCEPTED_ROLE_NAME = 'Rules Accepted';
+const RULES_CHANNEL_ID = '1482448016874143814';
+const RULES_MESSAGE_ID = '1482449081900072990';
+const RULES_ACCEPTED_EMOJI = '🎮';
 const OWNER_USER_ID = '592074887913406486';
 const DATA_DIR = process.env.RAILWAY_VOLUME_MOUNT_PATH || path.join(__dirname, 'data');
 const PSN_REGISTRATIONS_FILE = path.join(DATA_DIR, 'psn-registrations.json');
@@ -769,6 +779,52 @@ async function notifyOwner(subject, details) {
   }
 }
 
+function isRulesReactionTarget(reaction) {
+  return (
+    reaction.message.channelId === RULES_CHANNEL_ID &&
+    reaction.message.id === RULES_MESSAGE_ID &&
+    reaction.emoji.name === RULES_ACCEPTED_EMOJI
+  );
+}
+
+async function handleRulesReactionRoleChange(reaction, user, shouldHaveRole) {
+  if (user.bot) {
+    return;
+  }
+
+  if (reaction.partial) {
+    await reaction.fetch();
+  }
+
+  if (reaction.message.partial) {
+    await reaction.message.fetch();
+  }
+
+  if (!isRulesReactionTarget(reaction) || !reaction.message.guild) {
+    return;
+  }
+
+  const rulesAcceptedRole = getRulesAcceptedRole(reaction.message.guild);
+
+  if (!rulesAcceptedRole) {
+    throw new Error(`The "${RULES_ACCEPTED_ROLE_NAME}" role was not found.`);
+  }
+
+  const member = await reaction.message.guild.members.fetch(user.id);
+
+  if (shouldHaveRole) {
+    if (!member.roles.cache.has(rulesAcceptedRole.id)) {
+      await member.roles.add(rulesAcceptedRole, 'Accepted server rules via reaction role');
+    }
+
+    return;
+  }
+
+  if (member.roles.cache.has(rulesAcceptedRole.id)) {
+    await member.roles.remove(rulesAcceptedRole, 'Removed server rules reaction');
+  }
+}
+
 function getHunterRoleNames() {
   return HUNTER_RANKS.map((rank) => rank.name);
 }
@@ -777,6 +833,14 @@ function memberHasAnyHunterRole(member) {
   return HUNTER_RANKS.some((rank) =>
     member.roles.cache.some((role) => role.name === rank.name)
   );
+}
+
+function getRulesAcceptedRole(guild) {
+  return guild.roles.cache.find((role) => role.name === RULES_ACCEPTED_ROLE_NAME) || null;
+}
+
+function memberHasRulesAcceptedRole(member) {
+  return member.roles.cache.some((role) => role.name === RULES_ACCEPTED_ROLE_NAME);
 }
 
 function getAuditableMembers(guildMembers) {
@@ -978,7 +1042,7 @@ function createHelpEmbed() {
       },
       {
         name: '!audit',
-        value: 'Admin only. Checks who is missing PSN registration or a hunter role.',
+        value: 'Admin only. Checks who is missing PSN registration or hunter roles.',
         inline: false,
       },
       {
@@ -986,9 +1050,15 @@ function createHelpEmbed() {
         value: 'Admin only. Tags members who still need to run `!registerpsn`.',
         inline: false,
       },
+      {
+        name: '!remindrules',
+        value: 'Admin only. Tags members who are still missing the `Rules Accepted` role.',
+        inline: false,
+      },
+    
     ],
     footer: {
-      text: 'Jarvis | PlayStation Trophy Assistant | Made for No BS Trophy Hunting |',
+      text: 'Jarvis | PlayStation Trophy Assistant | Made for No BS Trophy Hunting by Sebastian A. |',
     },
     timestamp: new Date().toISOString(),
   };
@@ -1200,6 +1270,30 @@ async function searchPsnProfilesGuides(query) {
 
 client.once('clientReady', () => {
   console.log(`Logged in as ${client.user.tag}`);
+});
+
+client.on('messageReactionAdd', async (reaction, user) => {
+  try {
+    await handleRulesReactionRoleChange(reaction, user, true);
+  } catch (error) {
+    console.error('Rules reaction add failed:', error.message);
+    await notifyOwner(
+      'rules reaction add failed',
+      `User: ${user.tag}\nChannel: ${reaction.message.channelId}\nMessage: ${reaction.message.id}\nError: ${error.message}`
+    );
+  }
+});
+
+client.on('messageReactionRemove', async (reaction, user) => {
+  try {
+    await handleRulesReactionRoleChange(reaction, user, false);
+  } catch (error) {
+    console.error('Rules reaction remove failed:', error.message);
+    await notifyOwner(
+      'rules reaction remove failed',
+      `User: ${user.tag}\nChannel: ${reaction.message.channelId}\nMessage: ${reaction.message.id}\nError: ${error.message}`
+    );
+  }
 });
 
 client.on('messageCreate', async (message) => {
@@ -1562,9 +1656,11 @@ client.on('messageCreate', async (message) => {
 
     try {
       const { memberRole, eligibleMembers, source } = await getAuditableMembersForGuild(message.guild);
+      const rulesAcceptedRole = getRulesAcceptedRole(message.guild);
 
       const missingRegistration = [];
       const missingHunterRole = [];
+      const missingRulesAccepted = [];
 
       for (const member of eligibleMembers.values()) {
         const saved = psnRegistrations[member.id];
@@ -1575,6 +1671,10 @@ client.on('messageCreate', async (message) => {
 
         if (!memberHasAnyHunterRole(member)) {
           missingHunterRole.push(member);
+        }
+
+        if (rulesAcceptedRole && !memberHasRulesAcceptedRole(member)) {
+          missingRulesAccepted.push(member);
         }
       }
 
@@ -1614,6 +1714,11 @@ client.on('messageCreate', async (message) => {
                 inline: false,
               },
               {
+                name: 'Missing Rules Accepted',
+                value: rulesAcceptedRole ? formatMemberList(missingRulesAccepted) : 'The Rules Accepted role was not found.',
+                inline: false,
+              },
+              {
                 name: 'Hunter Roles Checked',
                 value: getHunterRoleNames().join(', '),
                 inline: false,
@@ -1621,7 +1726,7 @@ client.on('messageCreate', async (message) => {
             ],
             footer: {
               text:
-                missingRegistration.length > 20 || missingHunterRole.length > 20
+                missingRegistration.length > 20 || missingHunterRole.length > 20 || missingRulesAccepted.length > 20
                   ? 'Jarvis | Lists are capped at 20 members in the embed'
                   : source === 'role-cache' || source === 'memory-cache'
                     ? 'Jarvis | Admin audit using cached member data'
@@ -1676,6 +1781,48 @@ client.on('messageCreate', async (message) => {
         `User: ${message.author.tag}\nGuild: ${message.guild.name}\nError: ${error.message}`
       );
       return message.reply(`Something went wrong while sending the registration reminder: ${error.message}`);
+    }
+  }
+
+  if (command === '!remindrules') {
+    if (!message.guild || !message.member) {
+      return message.reply('This command only works inside a server.');
+    }
+
+    if (!isAdminMember(message.member)) {
+      return message.reply('You do not have permission to use this command.');
+    }
+
+    try {
+      const rulesAcceptedRole = getRulesAcceptedRole(message.guild);
+
+      if (!rulesAcceptedRole) {
+        return message.reply('The `Rules Accepted` role was not found.');
+      }
+
+      const { eligibleMembers } = await getAuditableMembersForGuild(message.guild);
+      const missingRulesAccepted = eligibleMembers.filter((member) => !memberHasRulesAcceptedRole(member));
+
+      if (missingRulesAccepted.size === 0) {
+        return message.reply('Everyone who should be in the server already has the `Rules Accepted` role.');
+      }
+
+      const visibleMembers = missingRulesAccepted.first(20);
+      const mentions = visibleMembers.map((member) => member.toString()).join(' ');
+
+      return message.reply({
+        content: `${mentions}\nPlease read the rules channel and complete the rules step so staff can give you the \`${RULES_ACCEPTED_ROLE_NAME}\` role.`,
+        allowedMentions: {
+          users: visibleMembers.map((member) => member.id),
+        },
+      });
+    } catch (error) {
+      console.error('remindrules command failed:', error.message);
+      await notifyOwner(
+        'remindrules failed',
+        `User: ${message.author.tag}\nGuild: ${message.guild.name}\nError: ${error.message}`
+      );
+      return message.reply(`Something went wrong while sending the rules reminder: ${error.message}`);
     }
   }
 
