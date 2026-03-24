@@ -254,27 +254,36 @@ function parsePlatHubGameOfYearPage(html, bodyText, username) {
   const $ = cheerio.load(html);
   const url = `${PSN_PLATHUB_BASE_URL}/game-of-the-year?psnId=${encodeURIComponent(username)}`;
   const ogImage = absolutizePlatHubUrl($('meta[property="og:image"]').attr('content'));
-  const headings = $('h1, h2, h3')
-    .map((_, element) => normalizeText($(element).text()))
-    .get()
-    .filter(Boolean);
   const normalizedText = normalizeText(bodyText);
   const cleanedText = normalizedText
     .replace(/Toggle Sidebar/gi, '')
     .replace(/Go to Main Page/gi, '')
     .replace(/Download/gi, '')
     .trim();
+  const title = 'GOTY Challenge';
 
-  const meaningfulHeadings = headings.filter((heading) => {
-    const lower = heading.toLowerCase();
-    return lower !== 'game of the year' && lower !== username.toLowerCase();
-  });
+  const completionMatch = cleanedText.match(/(\d+)\s*\/\s*(\d+)\s+GOTY titles platted\s+(\d+)%/i);
+  const challengeLine = completionMatch
+    ? `${completionMatch[1]} / ${completionMatch[2]} GOTY titles platted (${completionMatch[3]}%)`
+    : null;
 
-  const summary = trimText(cleanedText, 400);
+  const entryPattern = /(\d{4})\s+(.+?)\s+(The Game Awards|Spike VGAs \(2009–2013\)|Spike VGAs)\s+(Missing|Platted)/gi;
+  const entries = [];
+  let match;
+
+  while ((match = entryPattern.exec(cleanedText)) !== null && entries.length < 5) {
+    entries.push({
+      year: match[1],
+      game: match[2].trim(),
+      award: match[3].trim(),
+      status: match[4].trim(),
+    });
+  }
 
   return {
-    title: meaningfulHeadings[0] || `${username}'s Game of the Year`,
-    summary: summary || 'Open the PSN PlatHub page to view this player\'s Game of the Year results.',
+    title,
+    challengeLine: challengeLine || 'Open the PSN PlatHub page to view this player\'s Game of the Year results.',
+    entries,
     imageUrl: ogImage || null,
     url,
   };
@@ -1570,7 +1579,24 @@ client.on('messageCreate', async (message) => {
             color: EMBED_COLOR,
             title: result.goty.title,
             url: result.goty.url,
-            description: result.goty.summary,
+            description: `Game of the Year challenge progress for **${username}**`,
+            fields: [
+              {
+                name: 'Progress',
+                value: result.goty.challengeLine,
+                inline: false,
+              },
+              {
+                name: 'Recent Entries',
+                value:
+                  result.goty.entries && result.goty.entries.length > 0
+                    ? result.goty.entries
+                        .map((entry) => `${entry.year} - ${entry.game} (${entry.status})`)
+                        .join('\n')
+                    : 'Open the PSN PlatHub page to view the full challenge list.',
+                inline: false,
+              },
+            ],
             image: result.goty.imageUrl ? { url: result.goty.imageUrl } : undefined,
             footer: {
               text: `PSN PlatHub GOTY | ${username}`,
