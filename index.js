@@ -250,6 +250,36 @@ function parseLatestPlatHubCard(html) {
   };
 }
 
+function parsePlatHubGameOfYearPage(html, bodyText, username) {
+  const $ = cheerio.load(html);
+  const url = `${PSN_PLATHUB_BASE_URL}/game-of-the-year?psnId=${encodeURIComponent(username)}`;
+  const ogImage = absolutizePlatHubUrl($('meta[property="og:image"]').attr('content'));
+  const headings = $('h1, h2, h3')
+    .map((_, element) => normalizeText($(element).text()))
+    .get()
+    .filter(Boolean);
+  const normalizedText = normalizeText(bodyText);
+  const cleanedText = normalizedText
+    .replace(/Toggle Sidebar/gi, '')
+    .replace(/Go to Main Page/gi, '')
+    .replace(/Download/gi, '')
+    .trim();
+
+  const meaningfulHeadings = headings.filter((heading) => {
+    const lower = heading.toLowerCase();
+    return lower !== 'game of the year' && lower !== username.toLowerCase();
+  });
+
+  const summary = trimText(cleanedText, 400);
+
+  return {
+    title: meaningfulHeadings[0] || `${username}'s Game of the Year`,
+    summary: summary || 'Open the PSN PlatHub page to view this player\'s Game of the Year results.',
+    imageUrl: ogImage || null,
+    url,
+  };
+}
+
 function extractPsnUsername(input) {
   if (!input) {
     return null;
@@ -596,6 +626,80 @@ async function fetchPsnPlatHubSummary(username) {
     }
 
     return { kind: 'parse_error' };
+  } finally {
+    await context.close();
+  }
+}
+
+async function fetchGameOfYear(username) {
+  const browser = await getBrowser();
+  const context = await browser.newContext({
+    userAgent:
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+    viewport: { width: 1440, height: 900 },
+    locale: 'en-US',
+    extraHTTPHeaders: {
+      Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+      'Accept-Language': 'en-US,en;q=0.9',
+      'Upgrade-Insecure-Requests': '1',
+    },
+  });
+
+  await context.addInitScript(() => {
+    Object.defineProperty(navigator, 'webdriver', {
+      get: () => undefined,
+    });
+  });
+
+  const page = await context.newPage();
+  const url = `${PSN_PLATHUB_BASE_URL}/game-of-the-year?psnId=${encodeURIComponent(username)}`;
+
+  try {
+    const response = await page.goto(url, {
+      waitUntil: 'domcontentloaded',
+      timeout: 30000,
+    });
+
+    if (!response) {
+      throw new Error('No response received from PSN PlatHub Game of the Year.');
+    }
+
+    const status = response.status();
+
+    if (status === 404) {
+      return { kind: 'not_found' };
+    }
+
+    if (status >= 400) {
+      return { kind: 'blocked', status, provider: 'psnplathub' };
+    }
+
+    await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => null);
+    await page.waitForTimeout(3000);
+
+    const title = await page.title();
+    const html = await page.content();
+    const bodyText = await page.locator('body').innerText().catch(() => '');
+    const goty = parsePlatHubGameOfYearPage(html, bodyText, username);
+
+    if (goty.summary && goty.summary.length > 0) {
+      return {
+        kind: 'success',
+        goty,
+        provider: 'psnplathub',
+      };
+    }
+
+    if (/access denied|too many requests|temporarily unavailable/i.test(bodyText) || /just a moment|attention required/i.test(title)) {
+      return { kind: 'blocked', status, title, provider: 'psnplathub' };
+    }
+
+    return {
+      kind: 'parse_error',
+      provider: 'psnplathub',
+      textSnippet: bodyText.replace(/\s+/g, ' ').slice(0, 300),
+      gotyUrl: url,
+    };
   } finally {
     await context.close();
   }
@@ -1044,6 +1148,11 @@ function createHelpEmbed() {
         inline: false,
       },
       {
+        name: '!goty <username>',
+        value: 'Shows the PSN PlatHub Game of the Year page summary for a player.',
+        inline: false,
+      },
+      {
         name: '!psn <username>',
         value: 'Shows the user\'s PSNProfiles card.',
         inline: false,
@@ -1373,6 +1482,111 @@ client.on('messageCreate', async (message) => {
         },
       ],
     });
+  }
+
+  if (command === '!goty') {
+    const username = args[1];
+
+    if (!username) {
+      return message.reply('Use: !goty <psnprofiles-username>');
+    }
+
+    try {
+      const result = await fetchGameOfYear(username);
+
+      if (result.kind === 'not_found') {
+        return message.reply(`PSN PlatHub page for \`${username}\` was not found.`);
+      }
+
+      if (result.kind === 'blocked') {
+        return message.reply({
+          embeds: [
+            {
+              color: 0xff9900,
+              title: 'Game Of The Year Blocked',
+              description: `Jarvis could not reach the PSN PlatHub Game of the Year page for **${username}** right now.`,
+              fields: [
+                {
+                  name: 'Provider',
+                  value: 'PSN PlatHub',
+                  inline: true,
+                },
+                {
+                  name: 'Status',
+                  value: String(result.status || 'Unknown'),
+                  inline: true,
+                },
+                {
+                  name: 'Title',
+                  value: result.title || 'Unknown',
+                  inline: false,
+                },
+              ],
+              footer: {
+                text: 'Jarvis | GOTY Debug',
+              },
+              timestamp: new Date().toISOString(),
+            },
+          ],
+        });
+      }
+
+      if (result.kind === 'parse_error') {
+        return message.reply({
+          embeds: [
+            {
+              color: 0xff9900,
+              title: 'Game Of The Year Parsed Incompletely',
+              description: `Jarvis reached the PSN PlatHub Game of the Year page for **${username}**, but needs one more parser pass to read it cleanly.`,
+              fields: [
+                {
+                  name: 'Provider',
+                  value: 'PSN PlatHub',
+                  inline: true,
+                },
+                {
+                  name: 'Page',
+                  value: `[Open page](${result.gotyUrl || `${PSN_PLATHUB_BASE_URL}/game-of-the-year?psnId=${encodeURIComponent(username)}`})`,
+                  inline: false,
+                },
+                {
+                  name: 'Text Snippet',
+                  value: result.textSnippet ? `\`${trimText(result.textSnippet, 180)}\`` : 'None',
+                  inline: false,
+                },
+              ],
+              footer: {
+                text: 'Jarvis | GOTY Debug',
+              },
+              timestamp: new Date().toISOString(),
+            },
+          ],
+        });
+      }
+
+      return message.reply({
+        embeds: [
+          {
+            color: EMBED_COLOR,
+            title: result.goty.title,
+            url: result.goty.url,
+            description: result.goty.summary,
+            image: result.goty.imageUrl ? { url: result.goty.imageUrl } : undefined,
+            footer: {
+              text: `PSN PlatHub GOTY | ${username}`,
+            },
+            timestamp: new Date().toISOString(),
+          },
+        ],
+      });
+    } catch (error) {
+      console.error('Error fetching Game of the Year page:', error.message);
+      await notifyOwner(
+        'goty failed',
+        `User: ${message.author.tag}\nUsername: ${username}\nError: ${error.message}`
+      );
+      return message.reply('Something went wrong while checking the PSN PlatHub Game of the Year page. Please try again.');
+    }
   }
 
   if (command === '!registerpsn') {
