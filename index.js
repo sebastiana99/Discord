@@ -691,7 +691,10 @@ async function fetchGameOfYear(username) {
     const bodyText = await page.locator('body').innerText().catch(() => '');
     const goty = parsePlatHubGameOfYearPage(html, bodyText, username);
 
-    if (goty.summary && goty.summary.length > 0) {
+    if (
+      (goty.challengeLine && goty.challengeLine.length > 0) ||
+      (goty.entries && goty.entries.length > 0)
+    ) {
       return {
         kind: 'success',
         goty,
