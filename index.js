@@ -1093,6 +1093,11 @@ function createHelpEmbed() {
         value: 'Admin only. Tags members who are still missing the `Rules Accepted` role.',
         inline: false,
       },
+      {
+        name: '!resetaccess',
+        value: 'Admin only. Removes `The Assassin Brotherhood` from non-staff members so Jarvis can re-grant it through onboarding.',
+        inline: false,
+      },
     
     ],
     footer: {
@@ -1872,6 +1877,54 @@ client.on('messageCreate', async (message) => {
         `User: ${message.author.tag}\nGuild: ${message.guild.name}\nError: ${error.message}`
       );
       return message.reply(`Something went wrong while sending the rules reminder: ${error.message}`);
+    }
+  }
+
+  if (command === '!resetaccess') {
+    if (!message.guild || !message.member) {
+      return message.reply('This command only works inside a server.');
+    }
+
+    if (!isAdminMember(message.member)) {
+      return message.reply('You do not have permission to use this command.');
+    }
+
+    try {
+      const accessRole = getMemberAccessRole(message.guild);
+
+      if (!accessRole) {
+        return message.reply('The main member access role was not found.');
+      }
+
+      const members = await message.guild.members.fetch();
+      const membersToReset = members.filter(
+        (member) =>
+          !member.user.bot &&
+          !isAdminMember(member) &&
+          member.roles.cache.has(accessRole.id)
+      );
+
+      if (membersToReset.size === 0) {
+        return message.reply('No non-staff members currently have `The Assassin Brotherhood` to remove.');
+      }
+
+      let removedCount = 0;
+
+      for (const member of membersToReset.values()) {
+        await member.roles.remove(accessRole, 'Access reset requested by staff');
+        removedCount += 1;
+      }
+
+      auditMemberCache.delete(message.guild.id);
+
+      return message.reply(`Removed \`${accessRole.name}\` from **${removedCount}** non-staff members.`);
+    } catch (error) {
+      console.error('resetaccess command failed:', error.message);
+      await notifyOwner(
+        'resetaccess failed',
+        `User: ${message.author.tag}\nGuild: ${message.guild.name}\nError: ${error.message}`
+      );
+      return message.reply(`Something went wrong while resetting server access: ${error.message}`);
     }
   }
 
