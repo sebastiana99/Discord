@@ -32,6 +32,8 @@ const PSNPROFILES_BASE_URL = 'https://psnprofiles.com';
 const PSN_CARD_BASE_URL = 'https://card.psnprofiles.com/1';
 const POWERPYX_BASE_URL = 'https://www.powerpyx.com';
 const PSN_PLATHUB_BASE_URL = 'https://www.psnplathub.com';
+const PLAYSTATION_BLOG_BASE_URL = 'https://blog.playstation.com';
+const PUSHSQUARE_BASE_URL = 'https://www.pushsquare.com';
 const TROPHY_CACHE_TTL_MS = 10 * 60 * 1000;
 const PROFILE_CACHE_TTL_MS = 60 * 60 * 1000;
 const AUDIT_MEMBER_CACHE_TTL_MS = 60 * 1000;
@@ -45,9 +47,16 @@ const RULES_ACCEPTED_ROLE_NAME = 'Rules Accepted';
 const RULES_CHANNEL_ID = '1482448016874143814';
 const RULES_MESSAGE_ID = '1482449081900072990';
 const RULES_ACCEPTED_EMOJI = '🎮';
+const PLAYSTATION_NEWS_CHANNEL_ID = '1482550865847124101';
+const PLAYSTATION_PLUS_CHANNEL_ID = '1482550945945751764';
+const SERVER_SHUTDOWNS_CHANNEL_ID = '1485745504100028436';
 const OWNER_USER_ID = '592074887913406486';
 const DATA_DIR = process.env.RAILWAY_VOLUME_MOUNT_PATH || path.join(__dirname, 'data');
 const PSN_REGISTRATIONS_FILE = path.join(DATA_DIR, 'psn-registrations.json');
+const PLAYSTATION_NEWS_STATE_FILE = path.join(DATA_DIR, 'playstation-news-state.json');
+const PLAYSTATION_PLUS_STATE_FILE = path.join(DATA_DIR, 'playstation-plus-state.json');
+const SERVER_SHUTDOWNS_STATE_FILE = path.join(DATA_DIR, 'server-shutdowns-state.json');
+const PLAYSTATION_NEWS_POLL_INTERVAL_MS = 30 * 60 * 1000;
 const HUNTER_RANKS = [
   { name: 'Novice Hunter', min: 1, max: 99 },
   { name: 'Rising Hunter', min: 100, max: 199 },
@@ -94,6 +103,81 @@ function savePsnRegistrations() {
     fs.writeFileSync(PSN_REGISTRATIONS_FILE, JSON.stringify(psnRegistrations, null, 2));
   } catch (error) {
     console.error('Failed to save psn registrations:', error.message);
+  }
+}
+
+function loadPlayStationNewsState() {
+  try {
+    ensureDataDirectory();
+
+    if (!fs.existsSync(PLAYSTATION_NEWS_STATE_FILE)) {
+      return {};
+    }
+
+    const raw = fs.readFileSync(PLAYSTATION_NEWS_STATE_FILE, 'utf8');
+    return raw ? JSON.parse(raw) : {};
+  } catch (error) {
+    console.error('Failed to load PlayStation news state:', error.message);
+    return {};
+  }
+}
+
+function savePlayStationNewsState(state) {
+  try {
+    ensureDataDirectory();
+    fs.writeFileSync(PLAYSTATION_NEWS_STATE_FILE, JSON.stringify(state, null, 2));
+  } catch (error) {
+    console.error('Failed to save PlayStation news state:', error.message);
+  }
+}
+
+function loadPlayStationPlusState() {
+  try {
+    ensureDataDirectory();
+
+    if (!fs.existsSync(PLAYSTATION_PLUS_STATE_FILE)) {
+      return {};
+    }
+
+    const raw = fs.readFileSync(PLAYSTATION_PLUS_STATE_FILE, 'utf8');
+    return raw ? JSON.parse(raw) : {};
+  } catch (error) {
+    console.error('Failed to load PlayStation Plus state:', error.message);
+    return {};
+  }
+}
+
+function savePlayStationPlusState(state) {
+  try {
+    ensureDataDirectory();
+    fs.writeFileSync(PLAYSTATION_PLUS_STATE_FILE, JSON.stringify(state, null, 2));
+  } catch (error) {
+    console.error('Failed to save PlayStation Plus state:', error.message);
+  }
+}
+
+function loadServerShutdownsState() {
+  try {
+    ensureDataDirectory();
+
+    if (!fs.existsSync(SERVER_SHUTDOWNS_STATE_FILE)) {
+      return {};
+    }
+
+    const raw = fs.readFileSync(SERVER_SHUTDOWNS_STATE_FILE, 'utf8');
+    return raw ? JSON.parse(raw) : {};
+  } catch (error) {
+    console.error('Failed to load server shutdowns state:', error.message);
+    return {};
+  }
+}
+
+function saveServerShutdownsState(state) {
+  try {
+    ensureDataDirectory();
+    fs.writeFileSync(SERVER_SHUTDOWNS_STATE_FILE, JSON.stringify(state, null, 2));
+  } catch (error) {
+    console.error('Failed to save server shutdowns state:', error.message);
   }
 }
 
@@ -1298,6 +1382,267 @@ async function searchPowerPyx(query) {
   return results;
 }
 
+async function fetchLatestPlayStationBlogPost() {
+  const candidates = await fetchLatestPlayStationBlogPostCandidates();
+  return candidates[0] || null;
+}
+
+async function fetchLatestPlayStationPlusPost() {
+  const candidates = await fetchLatestPlayStationBlogPostCandidates();
+
+  return (
+    candidates.find((candidate) =>
+      /^PlayStation Plus Monthly Games for /i.test(candidate.title)
+    ) || null
+  );
+}
+
+async function fetchLatestPlayStationBlogPostCandidates() {
+  const response = await axios.get(PLAYSTATION_BLOG_BASE_URL, {
+    timeout: 20000,
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+      Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+      'Accept-Language': 'en-US,en;q=0.9',
+    },
+  });
+
+  const $ = cheerio.load(response.data);
+  const candidates = [];
+
+  $('a[href*="blog.playstation.com/20"], a[href^="/20"]').each((_, element) => {
+    const anchor = $(element);
+    const href = anchor.attr('href');
+    const title = normalizeText(anchor.text());
+
+    if (!href || !title) {
+      return;
+    }
+
+    const link = href.startsWith('http') ? href : new URL(href, PLAYSTATION_BLOG_BASE_URL).toString();
+    const container = anchor.closest('article, section, div');
+    const containerText = normalizeText(container.text());
+    const excerpt = trimText(containerText.replace(title, '').trim(), 220);
+    const dateMatch = containerText.match(/Date published:\s*([A-Za-z]+\s+\d{1,2},\s+\d{4})/i);
+    const imageSrc = container.find('img').first().attr('src');
+    const imageUrl = imageSrc ? (imageSrc.startsWith('http') ? imageSrc : new URL(imageSrc, PLAYSTATION_BLOG_BASE_URL).toString()) : null;
+
+    if (!candidates.some((candidate) => candidate.link === link)) {
+      candidates.push({
+        title,
+        link,
+        excerpt: excerpt || 'Open the official PlayStation Blog post for full details.',
+        publishedDate: dateMatch ? dateMatch[1] : null,
+        imageUrl,
+      });
+    }
+  });
+
+  return candidates;
+}
+
+async function checkAndPostLatestPlayStationNews({ initializeOnly = false } = {}) {
+  const latestPost = await fetchLatestPlayStationBlogPost();
+
+  if (!latestPost) {
+    return;
+  }
+
+  const state = loadPlayStationNewsState();
+
+  if (!state.lastPostedUrl) {
+    savePlayStationNewsState({
+      lastPostedUrl: latestPost.link,
+      initializedAt: new Date().toISOString(),
+    });
+    return;
+  }
+
+  if (state.lastPostedUrl === latestPost.link || initializeOnly) {
+    return;
+  }
+
+  const channel = await client.channels.fetch(PLAYSTATION_NEWS_CHANNEL_ID).catch(() => null);
+
+  if (!channel || !channel.isTextBased()) {
+    throw new Error('The PlayStation news channel could not be found or is not a text channel.');
+  }
+
+  await channel.send({
+    embeds: [
+      {
+        color: EMBED_COLOR,
+        title: latestPost.title,
+        url: latestPost.link,
+        description: latestPost.excerpt,
+        image: latestPost.imageUrl ? { url: latestPost.imageUrl } : undefined,
+        footer: {
+          text: latestPost.publishedDate
+            ? `Official PlayStation Blog | Published ${latestPost.publishedDate}`
+            : 'Official PlayStation Blog',
+        },
+        timestamp: new Date().toISOString(),
+      },
+    ],
+  });
+
+  savePlayStationNewsState({
+    lastPostedUrl: latestPost.link,
+    postedAt: new Date().toISOString(),
+  });
+}
+
+async function checkAndPostLatestPlayStationPlus({ initializeOnly = false } = {}) {
+  const latestPost = await fetchLatestPlayStationPlusPost();
+
+  if (!latestPost) {
+    return;
+  }
+
+  const state = loadPlayStationPlusState();
+
+  if (!state.lastPostedUrl) {
+    savePlayStationPlusState({
+      lastPostedUrl: latestPost.link,
+      initializedAt: new Date().toISOString(),
+    });
+    return;
+  }
+
+  if (state.lastPostedUrl === latestPost.link || initializeOnly) {
+    return;
+  }
+
+  const channel = await client.channels.fetch(PLAYSTATION_PLUS_CHANNEL_ID).catch(() => null);
+
+  if (!channel || !channel.isTextBased()) {
+    throw new Error('The PlayStation Plus channel could not be found or is not a text channel.');
+  }
+
+  await channel.send({
+    embeds: [
+      {
+        color: EMBED_COLOR,
+        title: latestPost.title,
+        url: latestPost.link,
+        description: latestPost.excerpt,
+        image: latestPost.imageUrl ? { url: latestPost.imageUrl } : undefined,
+        footer: {
+          text: latestPost.publishedDate
+            ? `Official PlayStation Blog | Published ${latestPost.publishedDate}`
+            : 'Official PlayStation Blog',
+        },
+        timestamp: new Date().toISOString(),
+      },
+    ],
+  });
+
+  savePlayStationPlusState({
+    lastPostedUrl: latestPost.link,
+    postedAt: new Date().toISOString(),
+  });
+}
+
+async function fetchLatestServerShutdownPostCandidates() {
+  const response = await axios.get(`${PUSHSQUARE_BASE_URL}/news`, {
+    timeout: 20000,
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+      Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+      'Accept-Language': 'en-US,en;q=0.9',
+    },
+  });
+
+  const $ = cheerio.load(response.data);
+  const candidates = [];
+
+  $('article a, h2 a, h3 a').each((_, element) => {
+    const anchor = $(element);
+    const href = anchor.attr('href');
+    const title = normalizeText(anchor.text());
+
+    if (!href || !title) {
+      return;
+    }
+
+    if (!/(server shutdown|shutting down|shutdown and delisting|delisting plans|will be delisted|online services)/i.test(title)) {
+      return;
+    }
+
+    const link = href.startsWith('http') ? href : new URL(href, PUSHSQUARE_BASE_URL).toString();
+    const container = anchor.closest('article, section, div');
+    const containerText = normalizeText(container.text());
+    const excerpt = trimText(containerText.replace(title, '').trim(), 220);
+    const imageSrc = container.find('img').first().attr('src');
+    const imageUrl = imageSrc ? (imageSrc.startsWith('http') ? imageSrc : new URL(imageSrc, PUSHSQUARE_BASE_URL).toString()) : null;
+
+    if (!candidates.some((candidate) => candidate.link === link)) {
+      candidates.push({
+        title,
+        link,
+        excerpt: excerpt || 'Open the article for full shutdown and delisting details.',
+        imageUrl,
+      });
+    }
+  });
+
+  return candidates;
+}
+
+async function fetchLatestServerShutdownPost() {
+  const candidates = await fetchLatestServerShutdownPostCandidates();
+  return candidates[0] || null;
+}
+
+async function checkAndPostLatestServerShutdowns({ initializeOnly = false } = {}) {
+  const latestPost = await fetchLatestServerShutdownPost();
+
+  if (!latestPost) {
+    return;
+  }
+
+  const state = loadServerShutdownsState();
+
+  if (!state.lastPostedUrl) {
+    saveServerShutdownsState({
+      lastPostedUrl: latestPost.link,
+      initializedAt: new Date().toISOString(),
+    });
+    return;
+  }
+
+  if (state.lastPostedUrl === latestPost.link || initializeOnly) {
+    return;
+  }
+
+  const channel = await client.channels.fetch(SERVER_SHUTDOWNS_CHANNEL_ID).catch(() => null);
+
+  if (!channel || !channel.isTextBased()) {
+    throw new Error('The server shutdowns channel could not be found or is not a text channel.');
+  }
+
+  await channel.send({
+    embeds: [
+      {
+        color: EMBED_COLOR,
+        title: latestPost.title,
+        url: latestPost.link,
+        description: latestPost.excerpt,
+        image: latestPost.imageUrl ? { url: latestPost.imageUrl } : undefined,
+        footer: {
+          text: 'Push Square | Server Shutdowns / Delistings',
+        },
+        timestamp: new Date().toISOString(),
+      },
+    ],
+  });
+
+  saveServerShutdownsState({
+    lastPostedUrl: latestPost.link,
+    postedAt: new Date().toISOString(),
+  });
+}
+
 function findBestPowerPyxResult(results, query, preferredKeywords) {
   return [...results]
     .map((result) => ({
@@ -1434,6 +1779,62 @@ async function searchPsnProfilesGuides(query) {
 
 client.once('clientReady', () => {
   console.log(`Logged in as ${client.user.tag}`);
+
+  setTimeout(() => {
+    checkAndPostLatestPlayStationNews({ initializeOnly: true }).catch(async (error) => {
+      console.error('Initial PlayStation news check failed:', error.message);
+      await notifyOwner(
+        'playstation news init failed',
+        `Error: ${error.message}`
+      );
+    });
+
+    checkAndPostLatestPlayStationPlus({ initializeOnly: true }).catch(async (error) => {
+      console.error('Initial PlayStation Plus check failed:', error.message);
+      await notifyOwner(
+        'playstation plus init failed',
+        `Error: ${error.message}`
+      );
+    });
+
+    checkAndPostLatestServerShutdowns({ initializeOnly: true }).catch(async (error) => {
+      console.error('Initial server shutdowns check failed:', error.message);
+      await notifyOwner(
+        'server shutdowns init failed',
+        `Error: ${error.message}`
+      );
+    });
+  }, 5000);
+
+  setInterval(() => {
+    checkAndPostLatestPlayStationNews().catch(async (error) => {
+      console.error('PlayStation news poll failed:', error.message);
+      await notifyOwner(
+        'playstation news poll failed',
+        `Error: ${error.message}`
+      );
+    });
+  }, PLAYSTATION_NEWS_POLL_INTERVAL_MS);
+
+  setInterval(() => {
+    checkAndPostLatestPlayStationPlus().catch(async (error) => {
+      console.error('PlayStation Plus poll failed:', error.message);
+      await notifyOwner(
+        'playstation plus poll failed',
+        `Error: ${error.message}`
+      );
+    });
+  }, PLAYSTATION_NEWS_POLL_INTERVAL_MS);
+
+  setInterval(() => {
+    checkAndPostLatestServerShutdowns().catch(async (error) => {
+      console.error('Server shutdowns poll failed:', error.message);
+      await notifyOwner(
+        'server shutdowns poll failed',
+        `Error: ${error.message}`
+      );
+    });
+  }, PLAYSTATION_NEWS_POLL_INTERVAL_MS);
 });
 
 client.on('messageReactionAdd', async (reaction, user) => {
