@@ -1249,6 +1249,21 @@ function createHelpEmbed() {
         inline: false,
       },
       {
+        name: '!psnews',
+        value: 'Shows the latest official PlayStation Blog post.',
+        inline: false,
+      },
+      {
+        name: '!psplus',
+        value: 'Shows the latest official PlayStation Plus monthly games post.',
+        inline: false,
+      },
+      {
+        name: '!shutdowns',
+        value: 'Shows the latest server shutdown or delisting article Jarvis is tracking.',
+        inline: false,
+      },
+      {
         name: '!psn <username>',
         value: 'Shows the user\'s PSNProfiles card.',
         inline: false,
@@ -1875,6 +1890,97 @@ client.on('messageCreate', async (message) => {
     return message.reply({
       embeds: [createHelpEmbed()],
     });
+  }
+
+  if (command === '!psnews') {
+    try {
+      const latestPost = await fetchLatestPlayStationBlogPost();
+
+      if (!latestPost) {
+        return message.reply('I could not find the latest PlayStation Blog post right now.');
+      }
+
+      return message.reply({
+        embeds: [
+          {
+            color: EMBED_COLOR,
+            title: latestPost.title,
+            url: latestPost.link,
+            description: latestPost.excerpt,
+            image: latestPost.imageUrl ? { url: latestPost.imageUrl } : undefined,
+            footer: {
+              text: latestPost.publishedDate
+                ? `Official PlayStation Blog | Published ${latestPost.publishedDate}`
+                : 'Official PlayStation Blog',
+            },
+            timestamp: new Date().toISOString(),
+          },
+        ],
+      });
+    } catch (error) {
+      console.error('psnews command failed:', error.message);
+      return message.reply('I could not fetch the latest PlayStation news right now. Please try again in a moment.');
+    }
+  }
+
+  if (command === '!psplus') {
+    try {
+      const latestPost = await fetchLatestPlayStationPlusPost();
+
+      if (!latestPost) {
+        return message.reply('I could not find the latest PlayStation Plus post right now.');
+      }
+
+      return message.reply({
+        embeds: [
+          {
+            color: EMBED_COLOR,
+            title: latestPost.title,
+            url: latestPost.link,
+            description: latestPost.excerpt,
+            image: latestPost.imageUrl ? { url: latestPost.imageUrl } : undefined,
+            footer: {
+              text: latestPost.publishedDate
+                ? `Official PlayStation Blog | Published ${latestPost.publishedDate}`
+                : 'Official PlayStation Blog',
+            },
+            timestamp: new Date().toISOString(),
+          },
+        ],
+      });
+    } catch (error) {
+      console.error('psplus command failed:', error.message);
+      return message.reply('I could not fetch the latest PlayStation Plus update right now. Please try again in a moment.');
+    }
+  }
+
+  if (command === '!shutdowns') {
+    try {
+      const latestPost = await fetchLatestServerShutdownPost();
+
+      if (!latestPost) {
+        return message.reply('I could not find a recent server shutdown or delisting article right now.');
+      }
+
+      return message.reply({
+        embeds: [
+          {
+            color: EMBED_COLOR,
+            title: latestPost.title,
+            url: latestPost.link,
+            description: latestPost.excerpt,
+            image: latestPost.imageUrl ? { url: latestPost.imageUrl } : undefined,
+            footer: {
+              text: 'Push Square | Server Shutdowns / Delistings',
+            },
+            timestamp: new Date().toISOString(),
+          },
+        ],
+      });
+    } catch (error) {
+      console.error('shutdowns command failed:', error.message);
+      return message.reply('I could not fetch the latest server shutdown news right now. Please try again in a moment.');
+    }
   }
 
   if (command === '!psn') {
