@@ -1584,16 +1584,21 @@ function createHelpEmbed() {
           value: 'Admin only. Checks who is missing PSN registration or hunter roles.',
           inline: false,
         },
-        {
-          name: '!checkaccess @user',
-          value: 'Admin only. Shows exactly which onboarding roles or registration steps a member is missing.',
-          inline: false,
-        },
-        {
-          name: '!remindpsn',
-          value: 'Admin only. Tags members who still need to run `!registerpsn`.',
-          inline: false,
-        },
+          {
+            name: '!checkaccess @user',
+            value: 'Admin only. Shows exactly which onboarding roles or registration steps a member is missing.',
+            inline: false,
+          },
+          {
+            name: '!refreshpsn @user',
+            value: 'Admin only. Re-checks a saved PSN registration and refreshes the member\'s hunter role.',
+            inline: false,
+          },
+          {
+            name: '!remindpsn',
+            value: 'Admin only. Tags members who still need to run `!registerpsn`.',
+            inline: false,
+          },
       {
         name: '!remindrules',
         value: 'Admin only. Tags members who are still missing the `Rules Accepted` role.',
@@ -3074,6 +3079,166 @@ client.on('messageCreate', async (message) => {
         `User: ${message.author.tag}\nGuild: ${message.guild.name}\nTarget: ${target.user.tag}\nError: ${error.message}`
       );
       return message.reply(`Something went wrong while checking that member's access: ${error.message}`);
+    }
+  }
+
+  if (command === '!refreshpsn') {
+    if (!message.guild || !message.member) {
+      return message.reply('This command only works inside a server.');
+    }
+
+    if (!isAdminMember(message.member)) {
+      return message.reply('You do not have permission to use this command.');
+    }
+
+    const target = message.mentions.members.first();
+
+    if (!target) {
+      return message.reply('Use: !refreshpsn @user');
+    }
+
+    try {
+      const saved = psnRegistrations[target.id];
+
+      if (!saved?.username) {
+        return message.reply(`Jarvis does not have a saved PSN registration for ${target}.`);
+      }
+
+      const result = await fetchPsnProfileSummaryWithRetry(saved.username);
+
+      if (result.kind === 'not_found') {
+        return message.reply(`PSN PlatHub user \`${saved.username}\` was not found.`);
+      }
+
+      if (result.kind === 'blocked') {
+        return message.reply({
+          embeds: [
+            {
+              color: 0xff9900,
+              title: 'PSN Refresh Blocked',
+              description: `Jarvis could not refresh the PSN profile for ${target} right now.`,
+              fields: [
+                {
+                  name: 'PSN Username',
+                  value: saved.username,
+                  inline: true,
+                },
+                {
+                  name: 'Provider',
+                  value: result.provider === 'psnplathub' ? 'PSN PlatHub' : result.provider === 'psnprofiles' ? 'PSNProfiles' : 'Unknown',
+                  inline: true,
+                },
+                {
+                  name: 'Status',
+                  value: String(result.status || 'Unknown'),
+                  inline: true,
+                },
+              ],
+              footer: {
+                text: 'Jarvis | Admin PSN Refresh',
+              },
+              timestamp: new Date().toISOString(),
+            },
+          ],
+        });
+      }
+
+      if (result.kind === 'parse_error') {
+        return message.reply(`Jarvis reached **${saved.username}**, but could not turn the latest profile data into usable stats.`);
+      }
+
+      let rank = null;
+
+      if (result.profile.trophyLevel !== null && result.profile.trophyLevel !== undefined) {
+        rank = await assignHunterRank(target, result.profile.trophyLevel);
+      }
+
+      saveUserPsnRegistration(
+        target,
+        result.profile.username,
+        result.profile.platinumCount,
+        result.profile.trophyLevel ?? null
+      );
+
+      const accessStatus = await syncMemberAccessRole(target);
+      const fetchedFrom =
+        result.source === 'cache'
+          ? 'Cached profile'
+          : result.source === 'retry'
+            ? 'Fetched after retry'
+            : 'Live profile';
+      const providerLabel =
+        result.provider === 'psnplathub'
+          ? 'PSN PlatHub'
+          : result.provider === 'psnprofiles'
+            ? 'PSNProfiles'
+            : 'Unknown';
+
+      return message.reply({
+        embeds: [
+          {
+            color: EMBED_COLOR,
+            title: 'PSN Registration Refreshed',
+            url: buildProfileUrl(result.profile.username),
+            description: `Jarvis refreshed the saved PSN registration for ${target}.`,
+            fields: [
+              {
+                name: 'PSN Username',
+                value: result.profile.username,
+                inline: true,
+              },
+              {
+                name: 'Platinums',
+                value: formatRegistrationStat(result.profile.platinumCount),
+                inline: true,
+              },
+              {
+                name: 'Trophy Level',
+                value: formatRegistrationStat(result.profile.trophyLevel),
+                inline: true,
+              },
+              {
+                name: 'Hunter Role',
+                value: rank ? rank.name : 'Not updated',
+                inline: true,
+              },
+              {
+                name: 'Server Access',
+                value:
+                  accessStatus === 'granted'
+                    ? 'Granted'
+                    : accessStatus === 'removed'
+                      ? 'Removed'
+                      : target.roles.cache.has(MEMBER_ROLE_ID)
+                        ? 'Already granted'
+                        : 'Waiting for Rules Accepted',
+                inline: true,
+              },
+              {
+                name: 'Provider',
+                value: providerLabel,
+                inline: true,
+              },
+              {
+                name: 'Source',
+                value: fetchedFrom,
+                inline: true,
+              },
+            ],
+            footer: {
+              text: 'Jarvis | Admin PSN Refresh',
+            },
+            timestamp: new Date().toISOString(),
+          },
+        ],
+      });
+    } catch (error) {
+      console.error('refreshpsn command failed:', error.message);
+      await notifyOwner(
+        'refreshpsn failed',
+        `User: ${message.author.tag}\nGuild: ${message.guild.name}\nTarget: ${target.user.tag}\nError: ${error.message}`
+      );
+      return message.reply(`Something went wrong while refreshing that PSN registration: ${error.message}`);
     }
   }
 
