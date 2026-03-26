@@ -53,6 +53,7 @@ const BOOSTING_SESSIONS_CATEGORY_ID = '1482552761403965511';
 const OWNER_USER_ID = '592074887913406486';
 const DATA_DIR = process.env.RAILWAY_VOLUME_MOUNT_PATH || path.join(__dirname, 'data');
 const PSN_REGISTRATIONS_FILE = path.join(DATA_DIR, 'psn-registrations.json');
+const SESSION_REGISTRATIONS_FILE = path.join(DATA_DIR, 'session-registrations.json');
 const PLAYSTATION_NEWS_STATE_FILE = path.join(DATA_DIR, 'playstation-news-state.json');
 const PLAYSTATION_PLUS_STATE_FILE = path.join(DATA_DIR, 'playstation-plus-state.json');
 const SERVER_SHUTDOWNS_STATE_FILE = path.join(DATA_DIR, 'server-shutdowns-state.json');
@@ -72,6 +73,7 @@ const HUNTER_RANKS = [
   { name: 'Platinum God', min: 999, max: 999 },
 ];
 let psnRegistrations = loadPsnRegistrations();
+let sessionRegistrations = loadSessionRegistrations();
 
 function ensureDataDirectory() {
   try {
@@ -103,6 +105,31 @@ function savePsnRegistrations() {
     fs.writeFileSync(PSN_REGISTRATIONS_FILE, JSON.stringify(psnRegistrations, null, 2));
   } catch (error) {
     console.error('Failed to save psn registrations:', error.message);
+  }
+}
+
+function loadSessionRegistrations() {
+  try {
+    ensureDataDirectory();
+
+    if (!fs.existsSync(SESSION_REGISTRATIONS_FILE)) {
+      return {};
+    }
+
+    const raw = fs.readFileSync(SESSION_REGISTRATIONS_FILE, 'utf8');
+    return raw ? JSON.parse(raw) : {};
+  } catch (error) {
+    console.error('Failed to load session registrations:', error.message);
+    return {};
+  }
+}
+
+function saveSessionRegistrations() {
+  try {
+    ensureDataDirectory();
+    fs.writeFileSync(SESSION_REGISTRATIONS_FILE, JSON.stringify(sessionRegistrations, null, 2));
+  } catch (error) {
+    console.error('Failed to save session registrations:', error.message);
   }
 }
 
@@ -1231,6 +1258,92 @@ async function notifyOwner(subject, details) {
   }
 }
 
+function getSessionRegistrationKey(guildId, messageId) {
+  return `${guildId}:${messageId}`;
+}
+
+function registerSessionMessage({ guildId, messageId, channelId, hostId, reactEmoji, game, dateTime, notes }) {
+  sessionRegistrations[getSessionRegistrationKey(guildId, messageId)] = {
+    guildId,
+    messageId,
+    channelId,
+    hostId,
+    reactEmoji,
+    game,
+    dateTime,
+    notes,
+    updatedAt: new Date().toISOString(),
+  };
+  saveSessionRegistrations();
+}
+
+function getSessionRegistration(guildId, messageId) {
+  return sessionRegistrations[getSessionRegistrationKey(guildId, messageId)] || null;
+}
+
+function isSessionReactionTarget(reaction) {
+  if (!reaction.message?.guildId || !reaction.message?.id) {
+    return false;
+  }
+
+  const session = getSessionRegistration(reaction.message.guildId, reaction.message.id);
+
+  if (!session) {
+    return false;
+  }
+
+  return reaction.emoji.name === session.reactEmoji;
+}
+
+async function handleSessionReactionAccessChange(reaction, user, shouldHaveAccess) {
+  if (user.bot) {
+    return;
+  }
+
+  if (reaction.partial) {
+    await reaction.fetch();
+  }
+
+  if (reaction.message.partial) {
+    await reaction.message.fetch();
+  }
+
+  if (!reaction.message.guild || !isSessionReactionTarget(reaction)) {
+    return;
+  }
+
+  const session = getSessionRegistration(reaction.message.guild.id, reaction.message.id);
+
+  if (!session) {
+    return;
+  }
+
+  const member = await reaction.message.guild.members.fetch(user.id);
+
+  if (isAdminMember(member) || member.id === session.hostId) {
+    return;
+  }
+
+  const channel = await reaction.message.guild.channels.fetch(session.channelId).catch(() => null);
+
+  if (!channel || channel.type !== ChannelType.GuildText) {
+    throw new Error('The session channel could not be found.');
+  }
+
+  if (shouldHaveAccess) {
+    await channel.permissionOverwrites.edit(member.id, {
+      ViewChannel: true,
+      SendMessages: true,
+      ReadMessageHistory: true,
+    }, {
+      reason: `Joined ${session.game} session via reaction`,
+    });
+    return;
+  }
+
+  await channel.permissionOverwrites.delete(member.id, `Left ${session.game} session via reaction`).catch(() => null);
+}
+
 function isRulesReactionTarget(reaction) {
   return (
     reaction.message.channelId === RULES_CHANNEL_ID &&
@@ -1615,7 +1728,7 @@ function buildSessionChannelName(game) {
     .slice(0, 90) || 'boost-session';
 }
 
-async function findOrCreateSessionChannel(guild, game) {
+async function findOrCreateSessionChannel(guild, game, hostId) {
   const channelName = buildSessionChannelName(game);
   const existingChannel = guild.channels.cache.find(
     (channel) =>
@@ -1633,6 +1746,20 @@ async function findOrCreateSessionChannel(guild, game) {
     type: ChannelType.GuildText,
     parent: BOOSTING_SESSIONS_CATEGORY_ID,
     topic: `Boosting session channel for ${game}`,
+    permissionOverwrites: [
+      {
+        id: guild.roles.everyone.id,
+        deny: ['ViewChannel'],
+      },
+      {
+        id: hostId,
+        allow: ['ViewChannel', 'SendMessages', 'ReadMessageHistory'],
+      },
+      ...ADMIN_ROLE_IDS.map((roleId) => ({
+        id: roleId,
+        allow: ['ViewChannel', 'SendMessages', 'ReadMessageHistory'],
+      })),
+    ],
     reason: 'Boosting session created via Jarvis',
   });
 
@@ -1963,10 +2090,11 @@ client.once('clientReady', () => {
 client.on('messageReactionAdd', async (reaction, user) => {
   try {
     await handleRulesReactionRoleChange(reaction, user, true);
+    await handleSessionReactionAccessChange(reaction, user, true);
   } catch (error) {
-    console.error('Rules reaction add failed:', error.message);
+    console.error('Reaction add handler failed:', error.message);
     await notifyOwner(
-      'rules reaction add failed',
+      'reaction add failed',
       `User: ${user.tag}\nChannel: ${reaction.message.channelId}\nMessage: ${reaction.message.id}\nError: ${error.message}`
     );
   }
@@ -1975,10 +2103,11 @@ client.on('messageReactionAdd', async (reaction, user) => {
 client.on('messageReactionRemove', async (reaction, user) => {
   try {
     await handleRulesReactionRoleChange(reaction, user, false);
+    await handleSessionReactionAccessChange(reaction, user, false);
   } catch (error) {
-    console.error('Rules reaction remove failed:', error.message);
+    console.error('Reaction remove handler failed:', error.message);
     await notifyOwner(
-      'rules reaction remove failed',
+      'reaction remove failed',
       `User: ${user.tag}\nChannel: ${reaction.message.channelId}\nMessage: ${reaction.message.id}\nError: ${error.message}`
     );
   }
@@ -3054,11 +3183,11 @@ client.on('messageCreate', async (message) => {
     const [game, dateTime, reactEmoji, notes] = parts;
 
     try {
-      const { channel, created } = await findOrCreateSessionChannel(message.guild, game);
+        const { channel, created } = await findOrCreateSessionChannel(message.guild, game, message.author.id);
 
-      const reply = await message.reply({
-        content: `${message.author}`,
-        embeds: [
+        const reply = await message.reply({
+          content: `${message.author}`,
+          embeds: [
           {
             color: EMBED_COLOR,
             title: `${game} Boost Session`,
@@ -3099,11 +3228,22 @@ client.on('messageCreate', async (message) => {
         allowedMentions: {
           users: [message.author.id],
         },
-      });
+        });
 
-      await reply.react(reactEmoji).catch(() => null);
+        registerSessionMessage({
+          guildId: message.guild.id,
+          messageId: reply.id,
+          channelId: channel.id,
+          hostId: message.author.id,
+          reactEmoji,
+          game,
+          dateTime,
+          notes,
+        });
 
-      return null;
+        await reply.react(reactEmoji).catch(() => null);
+
+        return null;
     } catch (error) {
       console.error('session command failed:', error.message);
       await notifyOwner(
