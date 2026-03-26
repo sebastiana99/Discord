@@ -2520,16 +2520,6 @@ client.on('messageCreate', async (message) => {
                     : 'None',
                 inline: false,
               },
-              {
-                name: 'Recent Entries',
-                value:
-                  result.alphabet.entries && result.alphabet.entries.length > 0
-                    ? result.alphabet.entries
-                        .map((entry) => `${entry.letter} - ${entry.game} (${entry.status})`)
-                        .join('\n')
-                    : 'PSN PlatHub did not expose specific per-letter game matches in a clean format.',
-                inline: false,
-              },
             ],
             image: result.alphabet.imageUrl ? { url: result.alphabet.imageUrl } : undefined,
             footer: {
