@@ -373,6 +373,44 @@ function parsePlatHubGameOfYearPage(html, bodyText, username) {
   };
 }
 
+function parsePlatHubAlphabetChallengePage(html, bodyText, username) {
+  const $ = cheerio.load(html);
+  const url = `${PSN_PLATHUB_BASE_URL}/alphabet-challenge?psnId=${encodeURIComponent(username)}`;
+  const ogImage = absolutizePlatHubUrl($('meta[property="og:image"]').attr('content'));
+  const normalizedText = normalizeText(bodyText);
+  const cleanedText = normalizedText
+    .replace(/Toggle Sidebar/gi, '')
+    .replace(/Go to Main Page/gi, '')
+    .replace(/Download/gi, '')
+    .trim();
+  const title = 'Alphabet Challenge';
+
+  const completionMatch = cleanedText.match(/(\d+)\s*\/\s*(26|\d+)\s+(?:letters|alphabet entries)\s+(?:completed|platted)\s+(\d+)%/i);
+  const challengeLine = completionMatch
+    ? `${completionMatch[1]} / ${completionMatch[2]} letters completed (${completionMatch[3]}%)`
+    : null;
+
+  const entryPattern = /\b([A-Z])\s+(.+?)\s+(Platted|Missing)\b/gi;
+  const entries = [];
+  let match;
+
+  while ((match = entryPattern.exec(cleanedText)) !== null && entries.length < 8) {
+    entries.push({
+      letter: match[1],
+      game: match[2].trim(),
+      status: match[3].trim(),
+    });
+  }
+
+  return {
+    title,
+    challengeLine: challengeLine || 'Open the PSN PlatHub page to view this player\'s Alphabet Challenge results.',
+    entries,
+    imageUrl: ogImage || null,
+    url,
+  };
+}
+
 function extractPsnUsername(input) {
   if (!input) {
     return null;
@@ -916,6 +954,83 @@ async function fetchGameOfYear(username) {
   }
 }
 
+async function fetchAlphabetChallenge(username) {
+  const browser = await getBrowser();
+  const context = await browser.newContext({
+    userAgent:
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+    viewport: { width: 1440, height: 900 },
+    locale: 'en-US',
+    extraHTTPHeaders: {
+      Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+      'Accept-Language': 'en-US,en;q=0.9',
+      'Upgrade-Insecure-Requests': '1',
+    },
+  });
+
+  await context.addInitScript(() => {
+    Object.defineProperty(navigator, 'webdriver', {
+      get: () => undefined,
+    });
+  });
+
+  const page = await context.newPage();
+  const url = `${PSN_PLATHUB_BASE_URL}/alphabet-challenge?psnId=${encodeURIComponent(username)}`;
+
+  try {
+    const response = await page.goto(url, {
+      waitUntil: 'domcontentloaded',
+      timeout: 30000,
+    });
+
+    if (!response) {
+      throw new Error('No response received from PSN PlatHub Alphabet Challenge.');
+    }
+
+    const status = response.status();
+
+    if (status === 404) {
+      return { kind: 'not_found' };
+    }
+
+    if (status >= 400) {
+      return { kind: 'blocked', status, provider: 'psnplathub' };
+    }
+
+    await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => null);
+    await page.waitForTimeout(3000);
+
+    const title = await page.title();
+    const html = await page.content();
+    const bodyText = await page.locator('body').innerText().catch(() => '');
+    const alphabet = parsePlatHubAlphabetChallengePage(html, bodyText, username);
+
+    if (
+      (alphabet.challengeLine && alphabet.challengeLine.length > 0) ||
+      (alphabet.entries && alphabet.entries.length > 0)
+    ) {
+      return {
+        kind: 'success',
+        alphabet,
+        provider: 'psnplathub',
+      };
+    }
+
+    if (/access denied|too many requests|temporarily unavailable/i.test(bodyText) || /just a moment|attention required/i.test(title)) {
+      return { kind: 'blocked', status, title, provider: 'psnplathub' };
+    }
+
+    return {
+      kind: 'parse_error',
+      provider: 'psnplathub',
+      textSnippet: bodyText.replace(/\s+/g, ' ').slice(0, 300),
+      alphabetUrl: url,
+    };
+  } finally {
+    await context.close();
+  }
+}
+
 async function fetchPsnProfileSummaryWithRetry(username) {
   const cachedProfile = getCachedProfileSummary(username);
 
@@ -1383,16 +1498,21 @@ function createHelpEmbed() {
         value: 'Shows the latest platinum, or a specific platinum number from PSN PlatHub.',
         inline: false,
       },
-      {
-        name: '!goty <username>',
-        value: 'Shows the PSN PlatHub Game of the Year page summary for a player.',
-        inline: false,
-      },
-      {
-        name: '!psnews',
-        value: 'Shows the latest official PlayStation Blog post.',
-        inline: false,
-      },
+        {
+          name: '!goty <username>',
+          value: 'Shows the PSN PlatHub Game of the Year page summary for a player.',
+          inline: false,
+        },
+        {
+          name: '!az <username>',
+          value: 'Shows the PSN PlatHub Alphabet Challenge summary for a player.',
+          inline: false,
+        },
+        {
+          name: '!psnews',
+          value: 'Shows the latest official PlayStation Blog post.',
+          inline: false,
+        },
       {
         name: '!psplus',
         value: 'Shows the latest official PlayStation Plus monthly games post.',
@@ -2267,6 +2387,128 @@ client.on('messageCreate', async (message) => {
         `User: ${message.author.tag}\nUsername: ${username}\nError: ${error.message}`
       );
       return message.reply('Something went wrong while checking the PSN PlatHub Game of the Year page. Please try again.');
+    }
+  }
+
+  if (command === '!az') {
+    const username = args[1];
+
+    if (!username) {
+      return message.reply('Use: !az <psnprofiles-username>');
+    }
+
+    try {
+      const result = await fetchAlphabetChallenge(username);
+
+      if (result.kind === 'not_found') {
+        return message.reply(`PSN PlatHub page for \`${username}\` was not found.`);
+      }
+
+      if (result.kind === 'blocked') {
+        return message.reply({
+          embeds: [
+            {
+              color: 0xff9900,
+              title: 'Alphabet Challenge Blocked',
+              description: `Jarvis could not reach the PSN PlatHub Alphabet Challenge page for **${username}** right now.`,
+              fields: [
+                {
+                  name: 'Provider',
+                  value: 'PSN PlatHub',
+                  inline: true,
+                },
+                {
+                  name: 'Status',
+                  value: String(result.status || 'Unknown'),
+                  inline: true,
+                },
+                {
+                  name: 'Title',
+                  value: result.title || 'Unknown',
+                  inline: false,
+                },
+              ],
+              footer: {
+                text: 'Jarvis | Alphabet Challenge Debug',
+              },
+              timestamp: new Date().toISOString(),
+            },
+          ],
+        });
+      }
+
+      if (result.kind === 'parse_error') {
+        return message.reply({
+          embeds: [
+            {
+              color: 0xff9900,
+              title: 'Alphabet Challenge Parsed Incompletely',
+              description: `Jarvis reached the PSN PlatHub Alphabet Challenge page for **${username}**, but needs one more parser pass to read it cleanly.`,
+              fields: [
+                {
+                  name: 'Provider',
+                  value: 'PSN PlatHub',
+                  inline: true,
+                },
+                {
+                  name: 'Page',
+                  value: `[Open page](${result.alphabetUrl || `${PSN_PLATHUB_BASE_URL}/alphabet-challenge?psnId=${encodeURIComponent(username)}`})`,
+                  inline: false,
+                },
+                {
+                  name: 'Text Snippet',
+                  value: result.textSnippet ? `\`${trimText(result.textSnippet, 180)}\`` : 'None',
+                  inline: false,
+                },
+              ],
+              footer: {
+                text: 'Jarvis | Alphabet Challenge Debug',
+              },
+              timestamp: new Date().toISOString(),
+            },
+          ],
+        });
+      }
+
+      return message.reply({
+        embeds: [
+          {
+            color: EMBED_COLOR,
+            title: result.alphabet.title,
+            url: result.alphabet.url,
+            description: `Alphabet challenge progress for **${username}**`,
+            fields: [
+              {
+                name: 'Progress',
+                value: result.alphabet.challengeLine,
+                inline: false,
+              },
+              {
+                name: 'Recent Entries',
+                value:
+                  result.alphabet.entries && result.alphabet.entries.length > 0
+                    ? result.alphabet.entries
+                        .map((entry) => `${entry.letter} - ${entry.game} (${entry.status})`)
+                        .join('\n')
+                    : 'Open the PSN PlatHub page to view the full alphabet list.',
+                inline: false,
+              },
+            ],
+            image: result.alphabet.imageUrl ? { url: result.alphabet.imageUrl } : undefined,
+            footer: {
+              text: `PSN PlatHub Alphabet | ${username}`,
+            },
+            timestamp: new Date().toISOString(),
+          },
+        ],
+      });
+    } catch (error) {
+      console.error('Error fetching Alphabet Challenge page:', error.message);
+      await notifyOwner(
+        'az failed',
+        `User: ${message.author.tag}\nUsername: ${username}\nError: ${error.message}`
+      );
+      return message.reply('Something went wrong while checking the PSN PlatHub Alphabet Challenge page. Please try again.');
     }
   }
 
