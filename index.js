@@ -1212,6 +1212,14 @@ function getAuditableMembers(guildMembers) {
   );
 }
 
+function getExcludedAccessMembers(guildMembers) {
+  return guildMembers.filter(
+    (member) =>
+      member.roles.cache.has(MEMBER_ROLE_ID) &&
+      (member.user.bot || isAdminMember(member))
+  );
+}
+
 async function getAuditableMembersForGuild(guild) {
   const memberRole = guild.roles.cache.get(MEMBER_ROLE_ID);
 
@@ -1221,29 +1229,34 @@ async function getAuditableMembersForGuild(guild) {
 
   const cachedEntry = auditMemberCache.get(guild.id);
 
-  if (cachedEntry && Date.now() - cachedEntry.cachedAt <= AUDIT_MEMBER_CACHE_TTL_MS) {
-    return {
-      memberRole,
-      eligibleMembers: cachedEntry.members,
-      source: 'memory-cache',
-    };
-  }
+    if (cachedEntry && Date.now() - cachedEntry.cachedAt <= AUDIT_MEMBER_CACHE_TTL_MS) {
+      return {
+        memberRole,
+        eligibleMembers: cachedEntry.members,
+        totalRoleMembers: memberRole.members.size,
+        excludedMembers: getExcludedAccessMembers(memberRole.members),
+        source: 'memory-cache',
+      };
+    }
 
-  try {
-    const members = await guild.members.fetch();
-    const eligibleMembers = getAuditableMembers(members);
+    try {
+      const members = await guild.members.fetch();
+      const eligibleMembers = getAuditableMembers(members);
+      const excludedMembers = getExcludedAccessMembers(members);
 
-    auditMemberCache.set(guild.id, {
-      members: eligibleMembers,
-      cachedAt: Date.now(),
-    });
+      auditMemberCache.set(guild.id, {
+        members: eligibleMembers,
+        cachedAt: Date.now(),
+      });
 
-    return {
-      memberRole,
-      eligibleMembers,
-      source: 'live-fetch',
-    };
-  } catch (error) {
+      return {
+        memberRole,
+        eligibleMembers,
+        totalRoleMembers: members.filter((member) => member.roles.cache.has(MEMBER_ROLE_ID)).size,
+        excludedMembers,
+        source: 'live-fetch',
+      };
+    } catch (error) {
     const canUseFallback =
       error.message.includes('opcode 8 was rate limited') ||
       error.message.includes('Members didn\'t arrive in time');
@@ -1255,18 +1268,23 @@ async function getAuditableMembersForGuild(guild) {
     const fallbackMembers =
       memberRole.members.size > 0 ? getAuditableMembers(memberRole.members) : getAuditableMembers(guild.members.cache);
 
-    if (fallbackMembers.size > 0) {
-      auditMemberCache.set(guild.id, {
-        members: fallbackMembers,
-        cachedAt: Date.now(),
-      });
+      if (fallbackMembers.size > 0) {
+        const fallbackSourceMembers = memberRole.members.size > 0 ? memberRole.members : guild.members.cache;
+        const excludedMembers = getExcludedAccessMembers(fallbackSourceMembers);
 
-      return {
-        memberRole,
-        eligibleMembers: fallbackMembers,
-        source: 'role-cache',
-      };
-    }
+        auditMemberCache.set(guild.id, {
+          members: fallbackMembers,
+          cachedAt: Date.now(),
+        });
+
+        return {
+          memberRole,
+          eligibleMembers: fallbackMembers,
+          totalRoleMembers: fallbackSourceMembers.filter((member) => member.roles.cache.has(MEMBER_ROLE_ID)).size,
+          excludedMembers,
+          source: 'role-cache',
+        };
+      }
 
     throw error;
   }
@@ -2586,8 +2604,8 @@ client.on('messageCreate', async (message) => {
     }
 
     try {
-      const { memberRole, eligibleMembers, source } = await getAuditableMembersForGuild(message.guild);
-      const rulesAcceptedRole = getRulesAcceptedRole(message.guild);
+        const { memberRole, eligibleMembers, totalRoleMembers, excludedMembers, source } = await getAuditableMembersForGuild(message.guild);
+        const rulesAcceptedRole = getRulesAcceptedRole(message.guild);
 
       const missingRegistration = [];
       const missingHunterRole = [];
@@ -2632,20 +2650,20 @@ client.on('messageCreate', async (message) => {
           {
             color: EMBED_COLOR,
             title: 'Jarvis Audit Report',
-            description: `Checked **${eligibleMembers.size}** members with the **${memberRole.name}** role.`,
+            description: `Checked **${eligibleMembers.size}** non-staff members with the **${memberRole.name}** role (**${totalRoleMembers}** total role holders, **${excludedMembers.size}** excluded as staff/bots).`,
             fields: [
               {
-                name: 'Missing PSN Registration',
+                name: 'Access Holders Missing PSN Registration',
                 value: formatMemberList(missingRegistration),
                 inline: false,
               },
               {
-                name: 'Missing Hunter Role',
+                name: 'Access Holders Missing Hunter Role',
                 value: formatMemberList(missingHunterRole),
                 inline: false,
               },
               {
-                name: 'Missing Rules Accepted',
+                name: 'Access Holders Missing Rules Accepted',
                 value: rulesAcceptedRole ? formatMemberList(missingRulesAccepted) : 'The Rules Accepted role was not found.',
                 inline: false,
               },
