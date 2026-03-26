@@ -1156,6 +1156,13 @@ function memberHasAnyHunterRole(member) {
   );
 }
 
+function getMemberHunterRoles(member) {
+  return HUNTER_RANKS
+    .map((rank) => member.guild.roles.cache.find((role) => role.name === rank.name))
+    .filter((role) => role && member.roles.cache.has(role.id))
+    .map((role) => role.name);
+}
+
 function getRulesAcceptedRole(guild) {
   return guild.roles.cache.find((role) => role.name === RULES_ACCEPTED_ROLE_NAME) || null;
 }
@@ -1413,16 +1420,21 @@ function createHelpEmbed() {
         value: 'Admin only. Shows saved PSN registrations.',
         inline: false,
       },
-      {
-        name: '!audit',
-        value: 'Admin only. Checks who is missing PSN registration or hunter roles.',
-        inline: false,
-      },
-      {
-        name: '!remindpsn',
-        value: 'Admin only. Tags members who still need to run `!registerpsn`.',
-        inline: false,
-      },
+        {
+          name: '!audit',
+          value: 'Admin only. Checks who is missing PSN registration or hunter roles.',
+          inline: false,
+        },
+        {
+          name: '!checkaccess @user',
+          value: 'Admin only. Shows exactly which onboarding roles or registration steps a member is missing.',
+          inline: false,
+        },
+        {
+          name: '!remindpsn',
+          value: 'Admin only. Tags members who still need to run `!registerpsn`.',
+          inline: false,
+        },
       {
         name: '!remindrules',
         value: 'Admin only. Tags members who are still missing the `Rules Accepted` role.',
@@ -2662,6 +2674,119 @@ client.on('messageCreate', async (message) => {
         `User: ${message.author.tag}\nGuild: ${message.guild.name}\nError: ${error.message}`
       );
       return message.reply(`Something went wrong while running the audit: ${error.message}`);
+    }
+  }
+
+  if (command === '!checkaccess') {
+    if (!message.guild || !message.member) {
+      return message.reply('This command only works inside a server.');
+    }
+
+    if (!isAdminMember(message.member)) {
+      return message.reply('You do not have permission to use this command.');
+    }
+
+    const target = message.mentions.members.first();
+
+    if (!target) {
+      return message.reply('Use: !checkaccess @user');
+    }
+
+    try {
+      const saved = psnRegistrations[target.id] || null;
+      const rulesAccepted = memberHasRulesAcceptedRole(target);
+      const accessRole = getMemberAccessRole(message.guild);
+      const hasAccessRole = accessRole ? target.roles.cache.has(accessRole.id) : false;
+      const currentHunterRoles = getMemberHunterRoles(target);
+      const expectedHunterRank =
+        saved?.trophyLevel !== null && saved?.trophyLevel !== undefined
+          ? getHunterRank(saved.trophyLevel)
+          : null;
+      const missingItems = [];
+
+      if (!rulesAccepted) {
+        missingItems.push('Rules Accepted');
+      }
+
+      if (!memberHasSavedRegistration(target)) {
+        missingItems.push('PSN Registration');
+      }
+
+      if (!memberHasAnyHunterRole(target)) {
+        missingItems.push('Hunter Role');
+      }
+
+      if (!hasAccessRole) {
+        missingItems.push('The Assassin Brotherhood');
+      }
+
+      return message.reply({
+        embeds: [
+          {
+            color: EMBED_COLOR,
+            title: 'Access Check',
+            description: `Jarvis checked ${target} for onboarding and access requirements.`,
+            fields: [
+              {
+                name: 'Rules Accepted',
+                value: rulesAccepted ? 'Yes' : 'No',
+                inline: true,
+              },
+              {
+                name: 'PSN Registration',
+                value: memberHasSavedRegistration(target) ? 'Yes' : 'No',
+                inline: true,
+              },
+              {
+                name: 'Server Access',
+                value: hasAccessRole ? 'Granted' : 'Not granted',
+                inline: true,
+              },
+              {
+                name: 'Saved PSN Username',
+                value: saved?.username || 'Not saved',
+                inline: true,
+              },
+              {
+                name: 'Saved Trophy Level',
+                value: formatRegistrationStat(saved?.trophyLevel),
+                inline: true,
+              },
+              {
+                name: 'Saved Platinums',
+                value: formatRegistrationStat(saved?.platinumCount),
+                inline: true,
+              },
+              {
+                name: 'Current Hunter Role',
+                value: currentHunterRoles.length > 0 ? currentHunterRoles.join(', ') : 'None',
+                inline: false,
+              },
+              {
+                name: 'Expected Hunter Role',
+                value: expectedHunterRank ? expectedHunterRank.name : 'Not available',
+                inline: false,
+              },
+              {
+                name: 'Missing Requirements',
+                value: missingItems.length > 0 ? missingItems.join(', ') : 'None',
+                inline: false,
+              },
+            ],
+            footer: {
+              text: 'Jarvis | Access Troubleshooting',
+            },
+            timestamp: new Date().toISOString(),
+          },
+        ],
+      });
+    } catch (error) {
+      console.error('checkaccess command failed:', error.message);
+      await notifyOwner(
+        'checkaccess failed',
+        `User: ${message.author.tag}\nGuild: ${message.guild.name}\nTarget: ${target.user.tag}\nError: ${error.message}`
+      );
+      return message.reply(`Something went wrong while checking that member's access: ${error.message}`);
     }
   }
 
