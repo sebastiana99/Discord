@@ -1005,10 +1005,12 @@ async function fetchAlphabetChallenge(username) {
     const bodyText = await page.locator('body').innerText().catch(() => '');
     const alphabet = parsePlatHubAlphabetChallengePage(html, bodyText, username);
 
-    if (
-      (alphabet.challengeLine && alphabet.challengeLine.length > 0) ||
-      (alphabet.entries && alphabet.entries.length > 0)
-    ) {
+    const hasUsableEntries = alphabet.entries && alphabet.entries.length > 0;
+    const hasUsableChallengeLine =
+      alphabet.challengeLine &&
+      !/Open the PSN PlatHub page to view/i.test(alphabet.challengeLine);
+
+    if (hasUsableEntries || hasUsableChallengeLine) {
       return {
         kind: 'success',
         alphabet,
