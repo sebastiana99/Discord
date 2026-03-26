@@ -45,7 +45,7 @@ const ADMIN_ROLE_IDS = ['1482453535550341250', '1484271731618091133'];
 const MEMBER_ROLE_ID = '1482450530247770305';
 const RULES_ACCEPTED_ROLE_NAME = 'Rules Accepted';
 const RULES_CHANNEL_ID = '1482448016874143814';
-const RULES_MESSAGE_ID = '1482449081900072990';
+const RULES_MESSAGE_ID = '1486405353137766401';
 const RULES_ACCEPTED_EMOJI = '🎮';
 const PLAYSTATION_NEWS_CHANNEL_ID = '1482550865847124101';
 const PLAYSTATION_PLUS_CHANNEL_ID = '1482550945945751764';
@@ -467,6 +467,34 @@ function parsePsnPlatHubSummaryFromText(bodyText) {
   };
 }
 
+function parseSpecificPlatHubTrophyFromText(bodyText, targetPlatinumNumber) {
+  const normalizedText = normalizeText(bodyText);
+  const trimmedHistory = normalizedText.replace(/^.*?LEVEL\s+\d{1,4}\s+\d{1,5}\s+\d{1,5}\s+\d{1,5}\s+\d{1,5}\s+\d{1,6}\s*/i, '');
+  const entryPattern = /(.+?)\s+(PS5|PS4|PS3|PS Vita)\s+([\d.]+%)\s+#(\d{1,5})/gi;
+  let match;
+
+  while ((match = entryPattern.exec(trimmedHistory)) !== null) {
+    const platinumNumber = Number.parseInt(match[4], 10);
+
+    if (platinumNumber !== targetPlatinumNumber) {
+      continue;
+    }
+
+    return {
+      trophyName: match[1].trim(),
+      gameName: match[1].trim(),
+      platform: match[2].trim(),
+      rarity: match[3].trim(),
+      trophyType: 'Platinum',
+      platinumNumber: `#${match[4]}`,
+      earnedDate: null,
+      matchedPattern: match[0],
+    };
+  }
+
+  return null;
+}
+
 async function fetchLatestTrophy(username) {
   const browser = await getBrowser();
   const context = await browser.newContext({
@@ -535,6 +563,93 @@ async function fetchLatestTrophy(username) {
 
     if (/access denied|too many requests|temporarily unavailable/i.test(bodyText) || /just a moment|attention required/i.test(title)) {
       return { kind: 'blocked', status, title, provider: 'psnplathub' };
+    }
+
+    return {
+      kind: 'parse_error',
+      provider: 'psnplathub',
+      textSnippet: bodyText.replace(/\s+/g, ' ').slice(0, 250),
+      latestPlatUrl: url,
+    };
+  } finally {
+    await context.close();
+  }
+}
+
+async function fetchSpecificTrophy(username, platinumNumber) {
+  const browser = await getBrowser();
+  const context = await browser.newContext({
+    userAgent:
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+    viewport: { width: 1440, height: 900 },
+    locale: 'en-US',
+    extraHTTPHeaders: {
+      Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+      'Accept-Language': 'en-US,en;q=0.9',
+      'Upgrade-Insecure-Requests': '1',
+    },
+  });
+
+  await context.addInitScript(() => {
+    Object.defineProperty(navigator, 'webdriver', {
+      get: () => undefined,
+    });
+  });
+
+  const page = await context.newPage();
+  const url = `${PSN_PLATHUB_BASE_URL}/mosaic?psnId=${encodeURIComponent(username)}`;
+
+  try {
+    const response = await page.goto(url, {
+      waitUntil: 'domcontentloaded',
+      timeout: 30000,
+    });
+
+    if (!response) {
+      throw new Error('No response received from PSN PlatHub mosaic.');
+    }
+
+    const status = response.status();
+
+    if (status === 404) {
+      return { kind: 'not_found' };
+    }
+
+    if (status >= 400) {
+      return { kind: 'blocked', status, provider: 'psnplathub' };
+    }
+
+    await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => null);
+    await page.waitForTimeout(3000);
+
+    const title = await page.title();
+    const bodyText = await page.locator('body').innerText().catch(() => '');
+    const trophy = parseSpecificPlatHubTrophyFromText(bodyText, platinumNumber);
+
+    if (trophy) {
+      return {
+        kind: 'success',
+        trophy: {
+          ...trophy,
+          latestPlatUrl: url,
+        },
+        provider: 'psnplathub',
+      };
+    }
+
+    const bodyLower = bodyText.toLowerCase();
+
+    if (
+      /rate limit|too many requests|temporarily unavailable|please try again later/i.test(bodyText) ||
+      /captcha|access denied|just a moment|attention required/i.test(title)
+    ) {
+      return { kind: 'blocked', status, title, provider: 'psnplathub' };
+    }
+
+    if (
+      /no profile found|could not find|error has occurred|updated profile on psnprofiles/i.test(bodyLower)
+    ) {
+      return { kind: 'not_found' };
     }
 
     return {
@@ -1239,8 +1354,8 @@ function createHelpEmbed() {
         inline: true,
       },
       {
-        name: '!trophy <username>',
-        value: 'Shows the latest platinum card details from PSN PlatHub.',
+        name: '!trophy [number] <username>',
+        value: 'Shows the latest platinum, or a specific platinum number from PSN PlatHub.',
         inline: false,
       },
       {
@@ -2160,8 +2275,8 @@ client.on('messageCreate', async (message) => {
         result = await fetchPsnProfileSummaryWithRetry(username);
       }
 
-      if (result.kind === 'not_found') {
-        return message.reply(`PSNProfiles user \`${username}\` was not found.`);
+        if (result.kind === 'not_found') {
+          return message.reply(`PSN PlatHub user \`${username}\` was not found.`);
       }
 
       if (result.kind === 'blocked') {
@@ -2855,14 +2970,17 @@ client.on('messageCreate', async (message) => {
   }
 
   if (command === '!trophy') {
-    const username = args[1];
+    const requestedPlatinumNumber = /^\d+$/.test(args[1] || '') ? Number.parseInt(args[1], 10) : null;
+    const username = requestedPlatinumNumber !== null ? args[2] : args[1];
 
     if (!username) {
-      return message.reply('Use: !trophy <psnprofiles-username>');
+      return message.reply('Use: !trophy <psnprofiles-username> or !trophy <platinum-number> <psnprofiles-username>');
     }
 
     try {
-      const result = await fetchLatestTrophyWithRetry(username);
+      const result = requestedPlatinumNumber !== null
+        ? await fetchSpecificTrophy(username, requestedPlatinumNumber)
+        : await fetchLatestTrophyWithRetry(username);
 
       if (result.kind === 'not_found') {
         return message.reply(`PSNProfiles user \`${username}\` was not found.`);
@@ -2881,8 +2999,10 @@ client.on('messageCreate', async (message) => {
           embeds: [
             {
               ...createTrophyFallbackEmbed(username, 'parse_error'),
-              title: 'Latest Platinum Parsed Incompletely',
-              description: 'Jarvis reached the latest platinum page, but could not read the full trophy details yet.',
+                title: requestedPlatinumNumber !== null ? 'Platinum History Parsed Incompletely' : 'Latest Platinum Parsed Incompletely',
+                description: requestedPlatinumNumber !== null
+                  ? `Jarvis reached **${username}** on PSN PlatHub, but could not read platinum #${requestedPlatinumNumber} cleanly yet.`
+                  : 'Jarvis reached the latest platinum page, but could not read the full trophy details yet.',
               fields: [
                 {
                   name: 'Provider',
@@ -2890,7 +3010,7 @@ client.on('messageCreate', async (message) => {
                   inline: true,
                 },
                 {
-                  name: 'Latest Platinum Page',
+                  name: requestedPlatinumNumber !== null ? 'Profile History Page' : 'Latest Platinum Page',
                   value: `[Open page](${result.latestPlatUrl || `${PSN_PLATHUB_BASE_URL}/latest-plat?psnId=${encodeURIComponent(username)}`})`,
                   inline: false,
                 },
@@ -2928,8 +3048,12 @@ client.on('messageCreate', async (message) => {
                   name: username,
                 },
             description: trophy.platinumNumber
-              ? `Latest platinum earned by **${username}** (${trophy.platinumNumber})`
-              : `Latest platinum earned by **${username}**`,
+              ? requestedPlatinumNumber !== null
+                ? `Platinum showcase for **${username}** (${trophy.platinumNumber})`
+                : `Latest platinum earned by **${username}** (${trophy.platinumNumber})`
+              : requestedPlatinumNumber !== null
+                ? `Platinum showcase for **${username}**`
+                : `Latest platinum earned by **${username}**`,
             fields: [
               {
                 name: 'Trophy',
@@ -2961,8 +3085,10 @@ client.on('messageCreate', async (message) => {
                   ]
                 : []),
               {
-                name: 'Latest Platinum Page',
-                value: `[Open latest platinum page](${trophy.latestPlatUrl || `${PSN_PLATHUB_BASE_URL}/latest-plat?psnId=${encodeURIComponent(username)}`})`,
+                name: requestedPlatinumNumber !== null ? 'Profile History Page' : 'Latest Platinum Page',
+                    value: requestedPlatinumNumber !== null
+                      ? `[Open profile history page](${trophy.latestPlatUrl || `${PSN_PLATHUB_BASE_URL}/mosaic?psnId=${encodeURIComponent(username)}`})`
+                      : `[Open latest platinum page](${trophy.latestPlatUrl || `${PSN_PLATHUB_BASE_URL}/latest-plat?psnId=${encodeURIComponent(username)}`})`,
                 inline: false,
               },
               {
