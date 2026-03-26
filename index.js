@@ -389,6 +389,14 @@ function parsePlatHubAlphabetChallengePage(html, bodyText, username) {
   const challengeLine = completionMatch
     ? `${completionMatch[1]} / ${completionMatch[2]} letters completed (${completionMatch[3]}%)`
     : null;
+  const missingLettersMatch = cleanedText.match(/Missing:\s*([A-Z](?:,\s*[A-Z])*)/i);
+  const missingLetters = missingLettersMatch
+    ? missingLettersMatch[1].split(/\s*,\s*/).filter(Boolean)
+    : [];
+  const allLetters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
+  const coveredLetters = missingLetters.length > 0
+    ? allLetters.filter((letter) => !missingLetters.includes(letter))
+    : [];
 
   const entryPattern = /\b([A-Z])\s+(.+?)\s+(Platted|Missing)\b/gi;
   const entries = [];
@@ -412,6 +420,8 @@ function parsePlatHubAlphabetChallengePage(html, bodyText, username) {
     title,
     challengeLine: challengeLine || 'Open the PSN PlatHub page to view this player\'s Alphabet Challenge results.',
     entries,
+    coveredLetters,
+    missingLetters,
     imageUrl: ogImage || null,
     url,
   };
@@ -1015,8 +1025,11 @@ async function fetchAlphabetChallenge(username) {
     const hasUsableChallengeLine =
       alphabet.challengeLine &&
       !/Open the PSN PlatHub page to view/i.test(alphabet.challengeLine);
+    const hasLetterBreakdown =
+      (alphabet.coveredLetters && alphabet.coveredLetters.length > 0) ||
+      (alphabet.missingLetters && alphabet.missingLetters.length > 0);
 
-    if (hasUsableEntries || hasUsableChallengeLine) {
+    if (hasUsableEntries || hasUsableChallengeLine || hasLetterBreakdown) {
       return {
         kind: 'success',
         alphabet,
@@ -2492,13 +2505,29 @@ client.on('messageCreate', async (message) => {
                 inline: false,
               },
               {
+                name: 'Covered Letters',
+                value:
+                  result.alphabet.coveredLetters && result.alphabet.coveredLetters.length > 0
+                    ? result.alphabet.coveredLetters.join(', ')
+                    : 'Not available',
+                inline: false,
+              },
+              {
+                name: 'Missing Letters',
+                value:
+                  result.alphabet.missingLetters && result.alphabet.missingLetters.length > 0
+                    ? result.alphabet.missingLetters.join(', ')
+                    : 'None',
+                inline: false,
+              },
+              {
                 name: 'Recent Entries',
                 value:
                   result.alphabet.entries && result.alphabet.entries.length > 0
                     ? result.alphabet.entries
                         .map((entry) => `${entry.letter} - ${entry.game} (${entry.status})`)
                         .join('\n')
-                    : 'Open the PSN PlatHub page to view the full alphabet list.',
+                    : 'PSN PlatHub did not expose specific per-letter game matches in a clean format.',
                 inline: false,
               },
             ],
