@@ -375,7 +375,7 @@ function parsePlatHubGameOfYearPage(html, bodyText, username) {
 
 function parsePlatHubAlphabetChallengePage(html, bodyText, username) {
   const $ = cheerio.load(html);
-  const url = `${PSN_PLATHUB_BASE_URL}/alphabet-challenge?psnId=${encodeURIComponent(username)}`;
+  const url = `${PSN_PLATHUB_BASE_URL}/alphabet?psnId=${encodeURIComponent(username)}`;
   const ogImage = absolutizePlatHubUrl($('meta[property="og:image"]').attr('content'));
   const normalizedText = normalizeText(bodyText);
   const cleanedText = normalizedText
@@ -975,7 +975,7 @@ async function fetchAlphabetChallenge(username) {
   });
 
   const page = await context.newPage();
-  const url = `${PSN_PLATHUB_BASE_URL}/alphabet-challenge?psnId=${encodeURIComponent(username)}`;
+  const url = `${PSN_PLATHUB_BASE_URL}/alphabet?psnId=${encodeURIComponent(username)}`;
 
   try {
     const response = await page.goto(url, {
@@ -2452,7 +2452,7 @@ client.on('messageCreate', async (message) => {
                 },
                 {
                   name: 'Page',
-                  value: `[Open page](${result.alphabetUrl || `${PSN_PLATHUB_BASE_URL}/alphabet-challenge?psnId=${encodeURIComponent(username)}`})`,
+                  value: `[Open page](${result.alphabetUrl || `${PSN_PLATHUB_BASE_URL}/alphabet?psnId=${encodeURIComponent(username)}`})`,
                   inline: false,
                 },
                 {
