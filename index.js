@@ -385,7 +385,7 @@ function parsePlatHubAlphabetChallengePage(html, bodyText, username) {
     .trim();
   const title = 'Alphabet Challenge';
 
-  const completionMatch = cleanedText.match(/(\d+)\s*\/\s*(26|\d+)\s+(?:letters|alphabet entries)\s+(?:completed|platted)\s+(\d+)%/i);
+  const completionMatch = cleanedText.match(/(\d+)\s*\/\s*(26|\d+)\s+letters?\s+(?:covered|completed|platted)\s+(\d+)%/i);
   const challengeLine = completionMatch
     ? `${completionMatch[1]} / ${completionMatch[2]} letters completed (${completionMatch[3]}%)`
     : null;
