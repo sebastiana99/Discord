@@ -6,7 +6,7 @@ console.log('DISCORD_TOKEN present:', Boolean(process.env.DISCORD_TOKEN));
 const fs = require('fs');
 const path = require('path');
 const axios = require('axios');
-const { Client, GatewayIntentBits, Partials } = require('discord.js');
+const { Client, GatewayIntentBits, Partials, ChannelType } = require('discord.js');
 const cheerio = require('cheerio');
 const { chromium } = require('playwright');
 
@@ -49,6 +49,7 @@ const RULES_ACCEPTED_EMOJI = '🎮';
 const PLAYSTATION_NEWS_CHANNEL_ID = '1482550865847124101';
 const PLAYSTATION_PLUS_CHANNEL_ID = '1482550945945751764';
 const SERVER_SHUTDOWNS_CHANNEL_ID = '1485745504100028436';
+const BOOSTING_SESSIONS_CATEGORY_ID = '1482552761403965511';
 const OWNER_USER_ID = '592074887913406486';
 const DATA_DIR = process.env.RAILWAY_VOLUME_MOUNT_PATH || path.join(__dirname, 'data');
 const PSN_REGISTRATIONS_FILE = path.join(DATA_DIR, 'psn-registrations.json');
@@ -1564,6 +1565,11 @@ function createHelpEmbed() {
             inline: false,
           },
           {
+            name: '!session <game> | <date/time> | <react emoji> | <notes>',
+            value: 'Admin only. Posts a boosting session embed and creates or reuses a matching session channel.',
+            inline: false,
+          },
+          {
             name: '!remindpsn',
             value: 'Admin only. Tags members who still need to run `!registerpsn`.',
             inline: false,
@@ -1599,6 +1605,38 @@ function trimText(text, maxLength) {
   }
 
   return `${normalized.slice(0, maxLength - 3).trim()}...`;
+}
+
+function buildSessionChannelName(game) {
+  return game
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 90) || 'boost-session';
+}
+
+async function findOrCreateSessionChannel(guild, game) {
+  const channelName = buildSessionChannelName(game);
+  const existingChannel = guild.channels.cache.find(
+    (channel) =>
+      channel.type === ChannelType.GuildText &&
+      channel.parentId === BOOSTING_SESSIONS_CATEGORY_ID &&
+      channel.name === channelName
+  );
+
+  if (existingChannel) {
+    return { channel: existingChannel, created: false };
+  }
+
+  const createdChannel = await guild.channels.create({
+    name: channelName,
+    type: ChannelType.GuildText,
+    parent: BOOSTING_SESSIONS_CATEGORY_ID,
+    topic: `Boosting session channel for ${game}`,
+    reason: 'Boosting session created via Jarvis',
+  });
+
+  return { channel: createdChannel, created: true };
 }
 
 async function fetchLatestPlayStationBlogPost() {
@@ -2994,6 +3032,85 @@ client.on('messageCreate', async (message) => {
         `User: ${message.author.tag}\nGuild: ${message.guild.name}\nTarget: ${target.user.tag}\nError: ${error.message}`
       );
       return message.reply(`Something went wrong while refreshing that PSN registration: ${error.message}`);
+    }
+  }
+
+  if (command === '!session') {
+    if (!message.guild || !message.member) {
+      return message.reply('This command only works inside a server.');
+    }
+
+    if (!isAdminMember(message.member)) {
+      return message.reply('You do not have permission to use this command.');
+    }
+
+    const rawInput = message.content.slice('!session'.length).trim();
+    const parts = rawInput.split('|').map((part) => part.trim());
+
+    if (parts.length < 4 || parts.some((part) => !part)) {
+      return message.reply('Use: !session <game> | <date/time> | <react emoji> | <notes>');
+    }
+
+    const [game, dateTime, reactEmoji, notes] = parts;
+
+    try {
+      const { channel, created } = await findOrCreateSessionChannel(message.guild, game);
+
+      const reply = await message.reply({
+        content: `${message.author}`,
+        embeds: [
+          {
+            color: EMBED_COLOR,
+            title: `${game} Boost Session`,
+            description: `Jarvis has scheduled a boosting session for **${game}**.`,
+            fields: [
+              {
+                name: 'Date / Time',
+                value: dateTime,
+                inline: true,
+              },
+              {
+                name: 'React To Join',
+                value: reactEmoji,
+                inline: true,
+              },
+              {
+                name: 'Session Channel',
+                value: `${channel}`,
+                inline: true,
+              },
+              {
+                name: 'Notes',
+                value: notes,
+                inline: false,
+              },
+              {
+                name: 'Channel Status',
+                value: created ? 'Created new session channel' : 'Reused existing session channel',
+                inline: false,
+              },
+            ],
+            footer: {
+              text: `Jarvis | Session created by ${message.author.tag}`,
+            },
+            timestamp: new Date().toISOString(),
+          },
+        ],
+        allowedMentions: {
+          users: [message.author.id],
+        },
+      });
+
+      await reply.react(reactEmoji).catch(() => null);
+
+      return null;
+    } catch (error) {
+      console.error('session command failed:', error.message);
+      await notifyOwner(
+        'session failed',
+        `User: ${message.author.tag}\nGuild: ${message.guild.name}\nInput: ${rawInput}\nError: ${error.message}`
+      );
+      return message.reply(`Something went wrong while creating that session: ${error.message}`);
     }
   }
 
