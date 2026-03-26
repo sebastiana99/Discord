@@ -2831,7 +2831,7 @@ client.on('messageCreate', async (message) => {
         .join(' ');
 
       return message.reply({
-        content: `${mentions}\nPlease use \`!registerpsn <your username or PSNProfiles link>\` so Jarvis can assign your hunter role automatically.`,
+        content: `${mentions}\nPlease use \`!registerpsn <your username>\` so Jarvis can assign your hunter role automatically.`,
         allowedMentions: {
           users: missingRegistration.first(20).map((member) => member.id),
         },
