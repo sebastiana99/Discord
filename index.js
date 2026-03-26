@@ -30,7 +30,6 @@ let browserPromise;
 const EMBED_COLOR = 0x0070d1;
 const PSNPROFILES_BASE_URL = 'https://psnprofiles.com';
 const PSN_CARD_BASE_URL = 'https://card.psnprofiles.com/1';
-const POWERPYX_BASE_URL = 'https://www.powerpyx.com';
 const PSN_PLATHUB_BASE_URL = 'https://www.psnplathub.com';
 const PLAYSTATION_BLOG_BASE_URL = 'https://blog.playstation.com';
 const PUSHSQUARE_BASE_URL = 'https://www.pushsquare.com';
@@ -1507,13 +1506,8 @@ function createHelpEmbed() {
   return {
     color: EMBED_COLOR,
     title: 'Jarvis Commands',
-    description: 'PSN registration, latest platinum lookups, staff audits, and guide searches for PlayStation hunters.',
+    description: 'PSN registration, challenge tracking, PlayStation news, and staff tools for No BS Trophy Huntin.',
     fields: [
-      {
-        name: '!ping',
-        value: 'Checks if the bot is online.',
-        inline: true,
-      },
       {
         name: '!trophy [number] <username>',
         value: 'Shows the latest platinum, or a specific platinum number from PSN PlatHub.',
@@ -1539,41 +1533,16 @@ function createHelpEmbed() {
         value: 'Shows the latest official PlayStation Plus monthly games post.',
         inline: false,
       },
-      {
-        name: '!shutdowns',
-        value: 'Shows the latest server shutdown or delisting article Jarvis is tracking.',
-        inline: false,
-      },
-      {
-        name: '!psn <username>',
-        value: 'Shows the user\'s PSNProfiles card.',
-        inline: false,
-      },
-      {
-        name: '!guide <game name>',
-        value: 'Finds the best PowerPyx trophy guide.',
-        inline: false,
-      },
-      {
-        name: '!trophylist <game name>',
-        value: 'Finds a PowerPyx trophy page for the game.',
-        inline: false,
-      },
-      {
-        name: '!platinum <game name>',
-        value: 'Shows key platinum roadmap details from PowerPyx.',
-        inline: false,
-      },
-      {
-        name: '!psnguide <game name>',
-        value: 'Finds the best matching PSNProfiles guide.',
-        inline: false,
-      },
-      {
-        name: '!registerpsn <username or link>',
-        value: 'Checks your PSN profile through PSN PlatHub and assigns your hunter rank role automatically.',
-        inline: false,
-      },
+        {
+          name: '!shutdowns',
+          value: 'Shows the latest server shutdown or delisting article Jarvis is tracking.',
+          inline: false,
+        },
+        {
+          name: '!registerpsn <username or link>',
+          value: 'Checks your PSN profile through PSN PlatHub and assigns your hunter rank role automatically.',
+          inline: false,
+        },
       {
         name: '!whoisregistered [@user]',
         value: 'Admin only. Shows saved PSN registrations.',
@@ -1630,62 +1599,6 @@ function trimText(text, maxLength) {
   }
 
   return `${normalized.slice(0, maxLength - 3).trim()}...`;
-}
-
-function scorePowerPyxResult(title, query, preferredKeywords = []) {
-  const normalizedTitle = title.toLowerCase();
-  const normalizedQuery = query.toLowerCase();
-  let score = 0;
-
-  if (normalizedTitle.includes(normalizedQuery)) {
-    score += 100;
-  }
-
-  for (const word of normalizedQuery.split(/\s+/)) {
-    if (word && normalizedTitle.includes(word)) {
-      score += 10;
-    }
-  }
-
-  for (const keyword of preferredKeywords) {
-    if (normalizedTitle.includes(keyword.toLowerCase())) {
-      score += 35;
-    }
-  }
-
-  return score;
-}
-
-async function searchPowerPyx(query) {
-  const searchUrl = `${POWERPYX_BASE_URL}/?s=${encodeURIComponent(query)}`;
-  const response = await axios.get(searchUrl, {
-    timeout: 20000,
-    headers: {
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-      Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-      'Accept-Language': 'en-US,en;q=0.9',
-    },
-  });
-
-  const $ = cheerio.load(response.data);
-  const seenLinks = new Set();
-  const results = [];
-
-  $('article, .post, .type-post').each((_, element) => {
-    const article = $(element);
-    const link = article.find('h2 a, h1 a, .entry-title a').first().attr('href');
-    const title = normalizeText(article.find('h2, h1, .entry-title').first().text());
-    const excerpt = normalizeText(article.find('.entry-summary, .post-excerpt, .entry-content').first().text());
-
-    if (!link || !title || seenLinks.has(link)) {
-      return;
-    }
-
-    seenLinks.add(link);
-    results.push({ title, link, excerpt });
-  });
-
-  return results;
 }
 
 async function fetchLatestPlayStationBlogPost() {
@@ -1949,140 +1862,6 @@ async function checkAndPostLatestServerShutdowns({ initializeOnly = false } = {}
   });
 }
 
-function findBestPowerPyxResult(results, query, preferredKeywords) {
-  return [...results]
-    .map((result) => ({
-      ...result,
-      score: scorePowerPyxResult(result.title, query, preferredKeywords),
-    }))
-    .sort((a, b) => b.score - a.score)[0];
-}
-
-async function fetchPowerPyxRoadmap(link) {
-  const response = await axios.get(link, {
-    timeout: 20000,
-    headers: {
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-      Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-      'Accept-Language': 'en-US,en;q=0.9',
-    },
-  });
-
-  const $ = cheerio.load(response.data);
-  const bulletItems = [];
-
-  $('li').each((_, element) => {
-    const text = normalizeText($(element).text());
-
-    if (
-      text.startsWith('Estimated trophy difficulty:') ||
-      text.startsWith('Approximate amount of time to platinum:') ||
-      text.startsWith('Number of missable trophies:') ||
-      text.startsWith('Glitched trophies:') ||
-      text.startsWith('Minimum Playthroughs:')
-    ) {
-      bulletItems.push(text);
-    }
-  });
-
-  return bulletItems;
-}
-
-function extractRoadmapValue(items, label) {
-  const item = items.find((entry) => entry.toLowerCase().startsWith(label.toLowerCase()));
-
-  if (!item) {
-    return null;
-  }
-
-  return item.slice(label.length).trim() || null;
-}
-
-async function searchPsnProfilesGuides(query) {
-  const browser = await getBrowser();
-  const context = await browser.newContext({
-    userAgent:
-      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-    viewport: { width: 1440, height: 900 },
-    locale: 'en-US',
-  });
-
-  await context.addInitScript(() => {
-    Object.defineProperty(navigator, 'webdriver', {
-      get: () => undefined,
-    });
-  });
-
-  const page = await context.newPage();
-  const searchUrl = `${PSNPROFILES_BASE_URL}/search/guides?q=${encodeURIComponent(query)}`;
-
-  try {
-    const response = await page.goto(searchUrl, {
-      waitUntil: 'domcontentloaded',
-      timeout: 30000,
-    });
-
-    if (!response) {
-      throw new Error('No response received from PSNProfiles guides.');
-    }
-
-    const status = response.status();
-
-    if (status >= 400) {
-      return { kind: 'blocked', status };
-    }
-
-    await page.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => null);
-    await page.waitForTimeout(2000);
-
-    const html = await page.content();
-    const title = await page.title();
-    const $ = cheerio.load(html);
-    const results = [];
-
-    $('a[href*="/guide/"]').each((_, element) => {
-      const anchor = $(element);
-      const href = anchor.attr('href');
-      const container = anchor.closest('li, tr, article, .guide, .box');
-      const headingText = normalizeText(
-        container.find('h1, h2, h3, h4, .title').first().text() || anchor.text()
-      );
-      const text = trimText(headingText, 200);
-
-      if (!href || !text) {
-        return;
-      }
-
-      const link = href.startsWith('http') ? href : new URL(href, PSNPROFILES_BASE_URL).toString();
-
-      if (!results.some((result) => result.link === link)) {
-        results.push({
-          title: text,
-          link,
-          score: scorePowerPyxResult(text, query, ['guide', 'roadmap']),
-        });
-      }
-    });
-
-    if (results.length > 0) {
-      results.sort((a, b) => b.score - a.score);
-      return { kind: 'success', results };
-    }
-
-    const challengeDetected =
-      /just a moment|attention required|access denied|security check/i.test(title) ||
-      /cf-browser-verification|cf-challenge|challenge-platform|turnstile|captcha/i.test(html);
-
-    if (challengeDetected) {
-      return { kind: 'blocked', status, title };
-    }
-
-    return { kind: 'not_found' };
-  } finally {
-    await context.close();
-  }
-}
-
 client.once('clientReady', () => {
   console.log(`Logged in as ${client.user.tag}`);
 
@@ -2172,10 +1951,6 @@ client.on('messageCreate', async (message) => {
 
   const args = message.content.trim().split(/\s+/);
   const command = args[0]?.toLowerCase();
-
-  if (command === '!ping') {
-    return message.reply('pong');
-  }
 
   if (command === '!help') {
     return message.reply({
@@ -2272,26 +2047,6 @@ client.on('messageCreate', async (message) => {
       console.error('shutdowns command failed:', error.message);
       return message.reply('I could not fetch the latest server shutdown news right now. Please try again in a moment.');
     }
-  }
-
-  if (command === '!psn') {
-    const username = args[1];
-
-    if (!username) {
-      return message.reply('Use: !psn <psnprofiles-username>');
-    }
-
-    const cardUrl = buildCardUrl(username);
-
-    return message.reply({
-      embeds: [
-        {
-          ...createBaseEmbed(username, `${username}'s PSN Card`),
-          description: `[Open PSNProfiles profile](${buildProfileUrl(username)})`,
-          image: { url: cardUrl },
-        },
-      ],
-    });
   }
 
   if (command === '!goty') {
@@ -3367,182 +3122,6 @@ client.on('messageCreate', async (message) => {
         `User: ${message.author.tag}\nGuild: ${message.guild.name}\nError: ${error.message}`
       );
       return message.reply(`Something went wrong while resetting server access: ${error.message}`);
-    }
-  }
-
-  if (command === '!guide') {
-    const query = args.slice(1).join(' ');
-
-    if (!query) {
-      return message.reply('Use: !guide <game name>');
-    }
-
-    try {
-      const results = await searchPowerPyx(query);
-      const guide = findBestPowerPyxResult(results, query, ['trophy guide', 'roadmap']);
-
-      if (!guide || guide.score <= 0) {
-        return message.reply(`I couldn't find a PowerPyx trophy guide for \`${query}\`.`);
-      }
-
-      return message.reply({
-        embeds: [
-          {
-            color: EMBED_COLOR,
-            title: guide.title,
-            url: guide.link,
-            description: guide.excerpt || `Open the PowerPyx guide for **${query}**.`,
-            footer: {
-              text: 'PowerPyx Guide Search',
-            },
-          },
-        ],
-      });
-    } catch (error) {
-      console.error('Error searching PowerPyx guide:', error.message);
-      return message.reply('I could not reach PowerPyx right now. Please try again in a moment.');
-    }
-  }
-
-  if (command === '!trophylist') {
-    const query = args.slice(1).join(' ');
-
-    if (!query) {
-      return message.reply('Use: !trophylist <game name>');
-    }
-
-    try {
-      const results = await searchPowerPyx(query);
-      const trophyList = findBestPowerPyxResult(results, query, ['trophy list', 'trophy guide', 'roadmap']);
-
-      if (!trophyList || trophyList.score <= 0) {
-        return message.reply(`I couldn't find a PowerPyx trophy page for \`${query}\`.`);
-      }
-
-      return message.reply({
-        embeds: [
-          {
-            color: EMBED_COLOR,
-            title: `${query} Trophy Page`,
-            url: trophyList.link,
-            description: `[Open on PowerPyx](${trophyList.link})\n\n${trophyList.title}`,
-            footer: {
-              text: 'PowerPyx Trophy Search',
-            },
-          },
-        ],
-      });
-    } catch (error) {
-      console.error('Error searching PowerPyx trophy list:', error.message);
-      return message.reply('I could not reach PowerPyx right now. Please try again in a moment.');
-    }
-  }
-
-  if (command === '!platinum') {
-    const query = args.slice(1).join(' ');
-
-    if (!query) {
-      return message.reply('Use: !platinum <game name>');
-    }
-
-    try {
-      const results = await searchPowerPyx(query);
-      const guide = findBestPowerPyxResult(results, query, ['trophy guide', 'roadmap']);
-
-      if (!guide || guide.score <= 0) {
-        return message.reply(`I couldn't find a PowerPyx platinum roadmap for \`${query}\`.`);
-      }
-
-      const roadmapItems = await fetchPowerPyxRoadmap(guide.link);
-      const difficulty = extractRoadmapValue(roadmapItems, 'Estimated trophy difficulty:');
-      const time = extractRoadmapValue(roadmapItems, 'Approximate amount of time to platinum:');
-      const missables = extractRoadmapValue(roadmapItems, 'Number of missable trophies:');
-      const glitched = extractRoadmapValue(roadmapItems, 'Glitched trophies:');
-      const playthroughs = extractRoadmapValue(roadmapItems, 'Minimum Playthroughs:');
-
-      return message.reply({
-        embeds: [
-          {
-            color: EMBED_COLOR,
-            title: `${query} Platinum Overview`,
-            url: guide.link,
-            description: `[Open full PowerPyx roadmap](${guide.link})`,
-            fields: [
-              {
-                name: 'Difficulty',
-                value: difficulty || 'Not found',
-                inline: true,
-              },
-              {
-                name: 'Time',
-                value: time || 'Not found',
-                inline: true,
-              },
-              {
-                name: 'Playthroughs',
-                value: playthroughs || 'Not found',
-                inline: true,
-              },
-              {
-                name: 'Missables',
-                value: missables || 'Not found',
-                inline: false,
-              },
-              {
-                name: 'Glitched Trophies',
-                value: glitched || 'Not found',
-                inline: true,
-              },
-            ],
-            footer: {
-              text: 'PowerPyx Platinum Search',
-            },
-          },
-        ],
-      });
-    } catch (error) {
-      console.error('Error searching PowerPyx platinum info:', error.message);
-      return message.reply('I could not read the PowerPyx roadmap right now. Please try again in a moment.');
-    }
-  }
-
-  if (command === '!psnguide') {
-    const query = args.slice(1).join(' ');
-
-    if (!query) {
-      return message.reply('Use: !psnguide <game name>');
-    }
-
-    try {
-      const result = await searchPsnProfilesGuides(query);
-
-      if (result.kind === 'blocked') {
-        console.error(`PSNProfiles guide search blocked for "${query}". Status: ${result.status}. Title: ${result.title || 'Unknown'}`);
-        return message.reply('PSNProfiles blocked the guide search right now. Please try again in a moment.');
-      }
-
-      if (result.kind === 'not_found' || !result.results?.length) {
-        return message.reply(`I couldn't find a PSNProfiles guide for \`${query}\`.`);
-      }
-
-      const guide = result.results[0];
-
-      return message.reply({
-        embeds: [
-          {
-            color: EMBED_COLOR,
-            title: trimText(guide.title, 256),
-            url: guide.link,
-            description: `[Open PSNProfiles guide](${guide.link})`,
-            footer: {
-              text: 'PSNProfiles Guide Search',
-            },
-          },
-        ],
-      });
-    } catch (error) {
-      console.error('Error searching PSNProfiles guides:', error.message);
-      return message.reply('I could not reach PSNProfiles guides right now. Please try again in a moment.');
     }
   }
 
