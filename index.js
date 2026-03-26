@@ -395,9 +395,15 @@ function parsePlatHubAlphabetChallengePage(html, bodyText, username) {
   let match;
 
   while ((match = entryPattern.exec(cleanedText)) !== null && entries.length < 8) {
+    const game = match[2].trim();
+
+    if (/platinum collection by first letter/i.test(game)) {
+      continue;
+    }
+
     entries.push({
       letter: match[1],
-      game: match[2].trim(),
+      game,
       status: match[3].trim(),
     });
   }
