@@ -2480,26 +2480,7 @@ client.on('messageCreate', async (message) => {
 
     try {
       const member = await message.guild.members.fetch(message.author.id);
-      const savedRegistration = psnRegistrations[member.id];
-      let result;
-
-      if (
-        savedRegistration &&
-        savedRegistration.username.toLowerCase() === username.toLowerCase() &&
-        (savedRegistration.platinumCount !== null || savedRegistration.trophyLevel !== null)
-      ) {
-        result = {
-          kind: 'success',
-          profile: {
-            username: savedRegistration.username,
-            platinumCount: savedRegistration.platinumCount,
-            trophyLevel: savedRegistration.trophyLevel ?? null,
-          },
-          source: 'saved',
-        };
-      } else {
-        result = await fetchPsnProfileSummaryWithRetry(username);
-      }
+      const result = await fetchPsnProfileSummaryWithRetry(username);
 
         if (result.kind === 'not_found') {
           return message.reply(`PSN PlatHub user \`${username}\` was not found.`);
@@ -2597,13 +2578,11 @@ client.on('messageCreate', async (message) => {
       );
       const accessRoleChange = await syncMemberAccessRole(member);
       const fetchedFrom =
-        result.source === 'saved'
-          ? 'Saved registration'
-          : result.source === 'cache'
-            ? 'Cached profile'
-            : result.source === 'retry'
-              ? 'Fetched after retry'
-              : 'Live profile';
+        result.source === 'cache'
+          ? 'Cached profile'
+          : result.source === 'retry'
+            ? 'Fetched after retry'
+            : 'Live profile';
       const providerLabel =
         result.provider === 'psnplathub'
           ? 'PSN PlatHub'
