@@ -35,6 +35,8 @@ const PSN_PLATHUB_BASE_URL = 'https://www.psnplathub.com';
 const POWERPYX_BASE_URL = 'https://www.powerpyx.com';
 const PLAYSTATION_BLOG_BASE_URL = 'https://blog.playstation.com';
 const PUSHSQUARE_BASE_URL = 'https://www.pushsquare.com';
+const PLAYSTATION_PLUS_GAMES_URL = 'https://www.playstation.com/en-us/ps-plus/games/';
+const PLAYSTATION_STORE_COLLECTIONS_URL = 'https://store.playstation.com/en-us/pages/collections';
 const TROPHY_CACHE_TTL_MS = 10 * 60 * 1000;
 const PROFILE_CACHE_TTL_MS = 60 * 60 * 1000;
 const AUDIT_MEMBER_CACHE_TTL_MS = 60 * 1000;
@@ -578,6 +580,55 @@ function parseSpecificPlatHubTrophyFromText(bodyText, targetPlatinumNumber) {
   return null;
 }
 
+function parsePlatHubPlatinumTitlesFromText(bodyText) {
+  const normalizedText = normalizeText(bodyText);
+  const trimmedHistory = normalizedText.replace(/^.*?LEVEL\s+\d{1,4}\s+\d{1,5}\s+\d{1,5}\s+\d{1,5}\s+\d{1,5}\s+\d{1,6}\s*/i, '');
+  const entryPattern = /(.+?)\s+(PS5|PS4|PS3|PS Vita)\s+([\d.]+%)\s+#(\d{1,5})/gi;
+  const titles = new Set();
+  let match;
+
+  while ((match = entryPattern.exec(trimmedHistory)) !== null) {
+    titles.add(match[1].trim().toLowerCase());
+  }
+
+  return titles;
+}
+
+function parseCandidateTitlesFromSection(sectionText) {
+  const lines = sectionText
+    .split(/\s{2,}|\n/)
+    .map((line) => normalizeText(line))
+    .filter(Boolean);
+  const titles = [];
+  const stopPatterns = [
+    /^(included|free|buy now|wishlist|download|learn more|game catalog|ubisoft\+ classics|classics catalog)$/i,
+    /^(ps plus|playstation plus|browse|collections|store|all games)$/i,
+    /^\d+\s*(games|titles)?$/i,
+  ];
+
+  for (const line of lines) {
+    if (line.length < 2 || line.length > 80) {
+      continue;
+    }
+
+    if (stopPatterns.some((pattern) => pattern.test(line))) {
+      continue;
+    }
+
+    if (/^[A-Z]$/.test(line)) {
+      continue;
+    }
+
+    if (!/[A-Za-z]/.test(line)) {
+      continue;
+    }
+
+    titles.push(line);
+  }
+
+  return [...new Set(titles)];
+}
+
 async function fetchLatestTrophy(username) {
   const browser = await getBrowser();
   const context = await browser.newContext({
@@ -741,6 +792,115 @@ async function fetchSpecificTrophy(username, platinumNumber) {
       textSnippet: bodyText.replace(/\s+/g, ' ').slice(0, 250),
       latestPlatUrl: url,
     };
+  } finally {
+    await context.close();
+  }
+}
+
+async function fetchUserPlatinumTitles(username) {
+  const browser = await getBrowser();
+  const context = await browser.newContext({
+    userAgent:
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+    viewport: { width: 1440, height: 900 },
+    locale: 'en-US',
+    extraHTTPHeaders: {
+      Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+      'Accept-Language': 'en-US,en;q=0.9',
+      'Upgrade-Insecure-Requests': '1',
+    },
+  });
+
+  await context.addInitScript(() => {
+    Object.defineProperty(navigator, 'webdriver', {
+      get: () => undefined,
+    });
+  });
+
+  const page = await context.newPage();
+  const url = `${PSN_PLATHUB_BASE_URL}/mosaic?psnId=${encodeURIComponent(username)}`;
+
+  try {
+    const response = await page.goto(url, {
+      waitUntil: 'domcontentloaded',
+      timeout: 30000,
+    });
+
+    if (!response) {
+      throw new Error('No response received from PSN PlatHub mosaic.');
+    }
+
+    const status = response.status();
+
+    if (status >= 400) {
+      return new Set();
+    }
+
+    await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => null);
+    await page.waitForTimeout(2000);
+
+    const bodyText = await page.locator('body').innerText().catch(() => '');
+    return parsePlatHubPlatinumTitlesFromText(bodyText);
+  } finally {
+    await context.close();
+  }
+}
+
+async function fetchOfficialPlayStationPlusTitles() {
+  const browser = await getBrowser();
+  const context = await browser.newContext({
+    userAgent:
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+    viewport: { width: 1440, height: 900 },
+    locale: 'en-US',
+  });
+
+  const page = await context.newPage();
+
+  try {
+    await page.goto(PLAYSTATION_PLUS_GAMES_URL, {
+      waitUntil: 'domcontentloaded',
+      timeout: 30000,
+    });
+    await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => null);
+    await page.waitForTimeout(2000);
+
+    const bodyText = await page.locator('body').innerText().catch(() => '');
+    const normalizedText = normalizeText(bodyText);
+    const sectionMatch = normalizedText.match(/Game Catalog\s+(.+?)(?:Classics Catalog|Monthly Games|Cloud Streaming|Ubisoft\+ Classics|$)/i);
+    const sectionText = sectionMatch ? sectionMatch[1] : normalizedText;
+
+    return parseCandidateTitlesFromSection(sectionText);
+  } finally {
+    await context.close();
+  }
+}
+
+async function fetchOfficialFreeToPlayTitles() {
+  const browser = await getBrowser();
+  const context = await browser.newContext({
+    userAgent:
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+    viewport: { width: 1440, height: 900 },
+    locale: 'en-US',
+  });
+
+  const page = await context.newPage();
+
+  try {
+    await page.goto(PLAYSTATION_STORE_COLLECTIONS_URL, {
+      waitUntil: 'domcontentloaded',
+      timeout: 30000,
+    });
+    await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => null);
+    await page.waitForTimeout(2000);
+
+    const bodyText = await page.locator('body').innerText().catch(() => '');
+    const normalizedText = normalizeText(bodyText);
+    const sectionMatch = normalizedText.match(/Free to Play\s+(.+?)(?:Demos|Deals|Editors' Choice|$)/i);
+    const sectionText = sectionMatch ? sectionMatch[1] : normalizedText;
+
+    return parseCandidateTitlesFromSection(sectionText);
   } finally {
     await context.close();
   }
@@ -1629,16 +1789,21 @@ function createHelpEmbed() {
           value: 'Shows the latest platinum, or a specific platinum number from PSN PlatHub.',
           inline: false,
         },
-        {
-          name: '!guide <game name>',
-          value: 'Finds the best matching PowerPyx trophy guide.',
-          inline: false,
-        },
           {
-            name: '!goty <username>',
-            value: 'Shows the PSN PlatHub Game of the Year page summary for a player.',
+            name: '!guide <game name>',
+            value: 'Finds the best matching PowerPyx trophy guide.',
             inline: false,
           },
+          {
+            name: '!random <free|plus>',
+            value: 'Suggests a random official free-to-play or PlayStation Plus game, filtered against your saved PSN registration when possible.',
+            inline: false,
+          },
+            {
+              name: '!goty <username>',
+              value: 'Shows the PSN PlatHub Game of the Year page summary for a player.',
+              inline: false,
+            },
         {
           name: '!az <username>',
           value: 'Shows the PSN PlatHub Alphabet Challenge summary for a player.',
@@ -2320,6 +2485,80 @@ client.on('messageCreate', async (message) => {
     } catch (error) {
       console.error('Error searching PowerPyx guide:', error.message);
       return message.reply('I could not reach PowerPyx right now. Please try again in a moment.');
+    }
+  }
+
+  if (command === '!random') {
+    const mode = (args[1] || '').toLowerCase();
+
+    if (!['free', 'plus'].includes(mode)) {
+      return message.reply('Use: !random <free|plus>');
+    }
+
+    if (!message.guild || !message.member) {
+      return message.reply('This command only works inside a server.');
+    }
+
+    try {
+      const saved = psnRegistrations[message.author.id];
+
+      if (!saved?.username) {
+        return message.reply('Please use `!registerpsn <username or link>` first so Jarvis knows which PSN profile to use.');
+      }
+
+      const [sourceTitles, plattedTitles] = await Promise.all([
+        mode === 'free' ? fetchOfficialFreeToPlayTitles() : fetchOfficialPlayStationPlusTitles(),
+        fetchUserPlatinumTitles(saved.username).catch(() => new Set()),
+      ]);
+
+      if (!sourceTitles.length) {
+        return message.reply(`I could not find any official ${mode === 'free' ? 'free-to-play' : 'PlayStation Plus'} titles right now.`);
+      }
+
+      const filteredTitles = sourceTitles.filter((title) => !plattedTitles.has(title.toLowerCase()));
+      const candidateTitles = filteredTitles.length > 0 ? filteredTitles : sourceTitles;
+      const selectedTitle = candidateTitles[Math.floor(Math.random() * candidateTitles.length)];
+      const sourceLabel = mode === 'free' ? 'Official PlayStation Store Free-to-Play' : 'Official PlayStation Plus Catalog';
+      const sourceUrl = mode === 'free' ? PLAYSTATION_STORE_COLLECTIONS_URL : PLAYSTATION_PLUS_GAMES_URL;
+
+      return message.reply({
+        embeds: [
+          {
+            color: EMBED_COLOR,
+            title: 'Random Game Suggestion',
+            url: sourceUrl,
+            description: `Jarvis picked **${selectedTitle}** for **${saved.username}**.`,
+            fields: [
+              {
+                name: 'Source',
+                value: sourceLabel,
+                inline: true,
+              },
+              {
+                name: 'Filter',
+                value: filteredTitles.length > 0 ? 'Excluded games you already appear to have platted' : 'No platinum exclusions were available',
+                inline: true,
+              },
+              {
+                name: 'Suggestion',
+                value: selectedTitle,
+                inline: false,
+              },
+            ],
+            footer: {
+              text: 'Jarvis | Random Backlog Suggestion',
+            },
+            timestamp: new Date().toISOString(),
+          },
+        ],
+      });
+    } catch (error) {
+      console.error('random command failed:', error.message);
+      await notifyOwner(
+        'random failed',
+        `User: ${message.author.tag}\nMode: ${mode}\nError: ${error.message}`
+      );
+      return message.reply('I could not build a random suggestion right now. Please try again in a moment.');
     }
   }
 
