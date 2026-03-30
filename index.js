@@ -28,6 +28,7 @@ const client = new Client({
 
 let browserPromise;
 const EMBED_COLOR = 0x0070d1;
+const PLATINUM_EMBED_COLOR = 0xd9d9ff;
 const PSNPROFILES_BASE_URL = 'https://psnprofiles.com';
 const PSN_CARD_BASE_URL = 'https://card.psnprofiles.com/1';
 const PSN_PLATHUB_BASE_URL = 'https://www.psnplathub.com';
@@ -3374,8 +3375,8 @@ client.on('messageCreate', async (message) => {
         ? await fetchSpecificTrophy(username, requestedPlatinumNumber)
         : await fetchLatestTrophyWithRetry(username);
 
-      if (result.kind === 'not_found') {
-        return message.reply(`PSNProfiles user \`${username}\` was not found.`);
+        if (result.kind === 'not_found') {
+          return message.reply(`PSN PlatHub user \`${username}\` was not found.`);
       }
 
       if (result.kind === 'blocked') {
@@ -3425,64 +3426,67 @@ client.on('messageCreate', async (message) => {
             ? 'Fetched after retry'
             : 'Live result';
 
-      return message.reply({
-        embeds: [
-          {
-            color: EMBED_COLOR,
-            title: trophy.gameName,
-            url: trophy.latestPlatUrl || `${PSN_PLATHUB_BASE_URL}/latest-plat?psnId=${encodeURIComponent(username)}`,
-            author: trophy.trophyIcon
-              ? {
-                  name: username,
-                  icon_url: trophy.trophyIcon,
-                }
-              : {
-                  name: username,
+        return message.reply({
+          embeds: [
+            {
+              color: PLATINUM_EMBED_COLOR,
+              title: trophy.platinumNumber
+                ? `${trophy.platinumNumber} • ${trophy.gameName}`
+                : trophy.gameName,
+              url: trophy.latestPlatUrl || `${PSN_PLATHUB_BASE_URL}/latest-plat?psnId=${encodeURIComponent(username)}`,
+              author: trophy.trophyIcon
+                ? {
+                    name: requestedPlatinumNumber !== null ? `${username}'s Platinum Showcase` : `${username}'s Latest Platinum`,
+                    icon_url: trophy.trophyIcon,
+                  }
+                : {
+                    name: requestedPlatinumNumber !== null ? `${username}'s Platinum Showcase` : `${username}'s Latest Platinum`,
+                  },
+              description: requestedPlatinumNumber !== null
+                ? `A highlighted platinum milestone from **${username}**'s collection.`
+                : `A showcase of **${username}**'s most recent platinum trophy.`,
+              fields: [
+                {
+                  name: 'Completion',
+                  value: trophy.trophyType || 'Platinum',
+                  inline: true,
                 },
-            description: trophy.platinumNumber
-              ? requestedPlatinumNumber !== null
-                ? `Platinum showcase for **${username}** (${trophy.platinumNumber})`
-                : `Latest platinum earned by **${username}** (${trophy.platinumNumber})`
-              : requestedPlatinumNumber !== null
-                ? `Platinum showcase for **${username}**`
-                : `Latest platinum earned by **${username}**`,
-            fields: [
-              {
-                name: 'Trophy',
-                value: trophy.trophyType,
-                inline: true,
-              },
-              {
-                name: 'Platform',
-                value: trophy.platform || 'Not available',
+                {
+                  name: 'Platform',
+                  value: trophy.platform || 'Not available',
                 inline: true,
               },
               {
                 name: 'PSN Rarity',
-                value: trophy.rarity || 'Not available',
-                inline: true,
-              },
-              {
-                name: 'Earned On',
-                value: trophy.earnedDate || 'Not available',
-                inline: true,
-              },
-              ...(trophy.platinumNumber
-                ? [
-                    {
-                      name: 'Platinum Number',
-                      value: trophy.platinumNumber,
-                      inline: true,
-                    },
-                  ]
-                : []),
-              {
-                name: requestedPlatinumNumber !== null ? 'Profile History Page' : 'Latest Platinum Page',
-                    value: requestedPlatinumNumber !== null
-                      ? `[Open profile history page](${trophy.latestPlatUrl || `${PSN_PLATHUB_BASE_URL}/mosaic?psnId=${encodeURIComponent(username)}`})`
-                      : `[Open latest platinum page](${trophy.latestPlatUrl || `${PSN_PLATHUB_BASE_URL}/latest-plat?psnId=${encodeURIComponent(username)}`})`,
-                inline: false,
-              },
+                  value: trophy.rarity || 'Not available',
+                  inline: true,
+                },
+                {
+                  name: 'Earned On',
+                  value: trophy.earnedDate || 'Not available',
+                  inline: true,
+                },
+                ...(trophy.platinumNumber
+                  ? [
+                      {
+                        name: 'Platinum Number',
+                        value: trophy.platinumNumber,
+                        inline: true,
+                      },
+                    ]
+                  : []),
+                {
+                  name: 'Game',
+                  value: trophy.gameName,
+                  inline: false,
+                },
+                {
+                  name: requestedPlatinumNumber !== null ? 'History Page' : 'Latest Platinum Page',
+                      value: requestedPlatinumNumber !== null
+                        ? `[Open profile history page](${trophy.latestPlatUrl || `${PSN_PLATHUB_BASE_URL}/mosaic?psnId=${encodeURIComponent(username)}`})`
+                        : `[Open latest platinum page](${trophy.latestPlatUrl || `${PSN_PLATHUB_BASE_URL}/latest-plat?psnId=${encodeURIComponent(username)}`})`,
+                  inline: false,
+                },
               {
                 name: 'Source',
                 value: fetchedFrom,
