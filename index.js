@@ -32,6 +32,7 @@ const PLATINUM_EMBED_COLOR = 0xd9d9ff;
 const PSNPROFILES_BASE_URL = 'https://psnprofiles.com';
 const PSN_CARD_BASE_URL = 'https://card.psnprofiles.com/1';
 const PSN_PLATHUB_BASE_URL = 'https://www.psnplathub.com';
+const POWERPYX_BASE_URL = 'https://www.powerpyx.com';
 const PLAYSTATION_BLOG_BASE_URL = 'https://blog.playstation.com';
 const PUSHSQUARE_BASE_URL = 'https://www.pushsquare.com';
 const TROPHY_CACHE_TTL_MS = 10 * 60 * 1000;
@@ -1623,16 +1624,21 @@ function createHelpEmbed() {
     title: 'Jarvis Commands',
     description: 'PSN registration, challenge tracking, PlayStation news, and staff tools for No BS Trophy Huntin.',
     fields: [
-      {
-        name: '!trophy [number] <username>',
-        value: 'Shows the latest platinum, or a specific platinum number from PSN PlatHub.',
-        inline: false,
-      },
         {
-          name: '!goty <username>',
-          value: 'Shows the PSN PlatHub Game of the Year page summary for a player.',
+          name: '!trophy [number] <username>',
+          value: 'Shows the latest platinum, or a specific platinum number from PSN PlatHub.',
           inline: false,
         },
+        {
+          name: '!guide <game name>',
+          value: 'Finds the best matching PowerPyx trophy guide.',
+          inline: false,
+        },
+          {
+            name: '!goty <username>',
+            value: 'Shows the PSN PlatHub Game of the Year page summary for a player.',
+            inline: false,
+          },
         {
           name: '!az <username>',
           value: 'Shows the PSN PlatHub Alphabet Challenge summary for a player.',
@@ -1719,6 +1725,71 @@ function trimText(text, maxLength) {
   }
 
   return `${normalized.slice(0, maxLength - 3).trim()}...`;
+}
+
+function scorePowerPyxResult(title, query, preferredKeywords = []) {
+  const normalizedTitle = title.toLowerCase();
+  const normalizedQuery = query.toLowerCase();
+  let score = 0;
+
+  if (normalizedTitle.includes(normalizedQuery)) {
+    score += 100;
+  }
+
+  for (const word of normalizedQuery.split(/\s+/)) {
+    if (word && normalizedTitle.includes(word)) {
+      score += 10;
+    }
+  }
+
+  for (const keyword of preferredKeywords) {
+    if (normalizedTitle.includes(keyword.toLowerCase())) {
+      score += 35;
+    }
+  }
+
+  return score;
+}
+
+async function searchPowerPyx(query) {
+  const searchUrl = `${POWERPYX_BASE_URL}/?s=${encodeURIComponent(query)}`;
+  const response = await axios.get(searchUrl, {
+    timeout: 20000,
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+      Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+      'Accept-Language': 'en-US,en;q=0.9',
+    },
+  });
+
+  const $ = cheerio.load(response.data);
+  const seenLinks = new Set();
+  const results = [];
+
+  $('article, .post, .type-post').each((_, element) => {
+    const article = $(element);
+    const link = article.find('h2 a, h1 a, .entry-title a').first().attr('href');
+    const title = normalizeText(article.find('h2, h1, .entry-title').first().text());
+    const excerpt = normalizeText(article.find('.entry-summary, .post-excerpt, .entry-content').first().text());
+
+    if (!link || !title || seenLinks.has(link)) {
+      return;
+    }
+
+    seenLinks.add(link);
+    results.push({ title, link, excerpt });
+  });
+
+  return results;
+}
+
+function findBestPowerPyxResult(results, query, preferredKeywords) {
+  return [...results]
+    .map((result) => ({
+      ...result,
+      score: scorePowerPyxResult(result.title, query, preferredKeywords),
+    }))
+    .sort((a, b) => b.score - a.score)[0];
 }
 
 function buildSessionChannelName(game) {
@@ -2214,6 +2285,41 @@ client.on('messageCreate', async (message) => {
     } catch (error) {
       console.error('shutdowns command failed:', error.message);
       return message.reply('I could not fetch the latest server shutdown news right now. Please try again in a moment.');
+    }
+  }
+
+  if (command === '!guide') {
+    const query = args.slice(1).join(' ');
+
+    if (!query) {
+      return message.reply('Use: !guide <game name>');
+    }
+
+    try {
+      const results = await searchPowerPyx(query);
+      const guide = findBestPowerPyxResult(results, query, ['trophy guide', 'roadmap']);
+
+      if (!guide || guide.score <= 0) {
+        return message.reply(`I couldn't find a PowerPyx trophy guide for \`${query}\`.`);
+      }
+
+      return message.reply({
+        embeds: [
+          {
+            color: EMBED_COLOR,
+            title: guide.title,
+            url: guide.link,
+            description: guide.excerpt || `Open the PowerPyx guide for **${query}**.`,
+            footer: {
+              text: 'PowerPyx Guide Search',
+            },
+            timestamp: new Date().toISOString(),
+          },
+        ],
+      });
+    } catch (error) {
+      console.error('Error searching PowerPyx guide:', error.message);
+      return message.reply('I could not reach PowerPyx right now. Please try again in a moment.');
     }
   }
 
