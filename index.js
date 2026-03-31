@@ -36,7 +36,7 @@ const POWERPYX_BASE_URL = 'https://www.powerpyx.com';
 const PLAYSTATION_BLOG_BASE_URL = 'https://blog.playstation.com';
 const PUSHSQUARE_BASE_URL = 'https://www.pushsquare.com';
 const PLAYSTATION_PLUS_GAMES_URL = 'https://www.playstation.com/en-us/ps-plus/games/';
-const PLAYSTATION_STORE_COLLECTIONS_URL = 'https://store.playstation.com/en-us/pages/collections';
+const PLAYSTATION_STORE_COLLECTIONS_URL = 'https://store.playstation.com/en-us/category/30749d2c-738f-4c36-9d6b-7ed517cca9ee/';
 const TROPHY_CACHE_TTL_MS = 10 * 60 * 1000;
 const PROFILE_CACHE_TTL_MS = 60 * 60 * 1000;
 const AUDIT_MEMBER_CACHE_TTL_MS = 60 * 1000;
@@ -635,35 +635,36 @@ function parseOfficialFreeToPlayTitlesFromText(rawText) {
     .map((line) => normalizeText(line))
     .filter(Boolean);
   const titles = [];
-  let inSection = false;
+  const blockedPatterns = [
+    /^(Games|Browse|PlayStation Store|PS5|PS4|PS VR2|PC|PS Plus|All Games|Add-Ons|Subscriptions|Collections|Deals)$/i,
+    /^(Sort by|Filter|Release date|Platform|Genre|Publisher|Price|Best selling|New releases)$/i,
+    /^(Free|Demo|Included)$/i,
+  ];
 
-  for (const line of lines) {
-    if (/^Free to play$/i.test(line)) {
-      inSection = true;
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i];
+
+    if (!/^Free$/i.test(line)) {
       continue;
     }
 
-    if (!inSection) {
-      continue;
-    }
+    for (let j = i - 1; j >= Math.max(0, i - 4); j -= 1) {
+      const candidate = lines[j];
 
-    if (/^(Demos|See more|Monthly Picks|PlayStation Indies|Games to wishlist)$/i.test(line)) {
+      if (
+        candidate.length < 2 ||
+        candidate.length > 90 ||
+        !/[A-Za-z]/.test(candidate) ||
+        blockedPatterns.some((pattern) => pattern.test(candidate)) ||
+        /^\$?\d/.test(candidate) ||
+        /save \d+%/i.test(candidate)
+      ) {
+        continue;
+      }
+
+      titles.push(candidate);
       break;
     }
-
-    if (/^(Free|Demo|Premium|ImageImage|PS4|PS5)$/i.test(line)) {
-      continue;
-    }
-
-    if (/^\$?\d/.test(line) || /save \d+%/i.test(line) || /~~/.test(line)) {
-      continue;
-    }
-
-    if (line.length < 2 || line.length > 80 || !/[A-Za-z]/.test(line)) {
-      continue;
-    }
-
-    titles.push(line);
   }
 
   return [...new Set(titles)];
