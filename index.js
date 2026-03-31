@@ -941,7 +941,10 @@ async function fetchOfficialPlayStationPlusTitles() {
   });
   const $ = cheerio.load(response.data);
   const rawText = $('body').text();
-  return parseOfficialPlayStationPlusTitlesFromText(rawText);
+  return {
+    titles: parseOfficialPlayStationPlusTitlesFromText(rawText),
+    textSnippet: normalizeText(rawText).slice(0, 500),
+  };
 }
 
 async function fetchOfficialFreeToPlayTitles() {
@@ -955,7 +958,10 @@ async function fetchOfficialFreeToPlayTitles() {
   });
   const $ = cheerio.load(response.data);
   const rawText = $('body').text();
-  return parseOfficialFreeToPlayTitlesFromText(rawText);
+  return {
+    titles: parseOfficialFreeToPlayTitlesFromText(rawText),
+    textSnippet: normalizeText(rawText).slice(0, 500),
+  };
 }
 
 async function fetchPsnProfileSummary(username) {
@@ -2558,13 +2564,43 @@ client.on('messageCreate', async (message) => {
         return message.reply('Please use `!registerpsn <username or link>` first so Jarvis knows which PSN profile to use.');
       }
 
-      const [sourceTitles, plattedTitles] = await Promise.all([
+      const [sourceResult, plattedTitles] = await Promise.all([
         mode === 'free' ? fetchOfficialFreeToPlayTitles() : fetchOfficialPlayStationPlusTitles(),
         fetchUserPlatinumTitles(saved.username).catch(() => new Set()),
       ]);
+      const sourceTitles = sourceResult.titles || [];
 
       if (!sourceTitles.length) {
-        return message.reply(`I could not find any official ${mode === 'free' ? 'free-to-play' : 'PlayStation Plus'} titles right now.`);
+        return message.reply({
+          embeds: [
+            {
+              color: 0xff9900,
+              title: 'Random Suggestion Parsed Incompletely',
+              description: `Jarvis reached the official ${mode === 'free' ? 'free-to-play' : 'PlayStation Plus'} source, but could not read the game list cleanly yet.`,
+              fields: [
+                {
+                  name: 'Source',
+                  value: mode === 'free' ? 'Official PlayStation Store Collections' : 'Official PlayStation Plus Games',
+                  inline: true,
+                },
+                {
+                  name: 'Page',
+                  value: `[Open source](${mode === 'free' ? PLAYSTATION_STORE_COLLECTIONS_URL : PLAYSTATION_PLUS_GAMES_URL})`,
+                  inline: false,
+                },
+                {
+                  name: 'Text Snippet',
+                  value: sourceResult.textSnippet ? `\`${trimText(sourceResult.textSnippet, 180)}\`` : 'None',
+                  inline: false,
+                },
+              ],
+              footer: {
+                text: 'Jarvis | Random Suggestion Debug',
+              },
+              timestamp: new Date().toISOString(),
+            },
+          ],
+        });
       }
 
       const filteredTitles = sourceTitles.filter((title) => !plattedTitles.has(title.toLowerCase()));
