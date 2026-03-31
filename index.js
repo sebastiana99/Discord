@@ -949,20 +949,45 @@ async function fetchOfficialPlayStationPlusTitles() {
 }
 
 async function fetchOfficialFreeToPlayTitles() {
-  const response = await axios.get(PLAYSTATION_STORE_COLLECTIONS_URL, {
-    timeout: 20000,
-    headers: {
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-      Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-      'Accept-Language': 'en-US,en;q=0.9',
-    },
+  const browser = await getBrowser();
+  const context = await browser.newContext({
+    userAgent:
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+    viewport: { width: 1440, height: 900 },
+    locale: 'en-US',
   });
-  const $ = cheerio.load(response.data);
-  const rawText = $('body').text();
-  return {
-    titles: parseOfficialFreeToPlayTitlesFromText(rawText),
-    textSnippet: normalizeText(rawText).slice(0, 500),
-  };
+  const page = await context.newPage();
+
+  try {
+    await page.goto(PLAYSTATION_STORE_COLLECTIONS_URL, {
+      waitUntil: 'domcontentloaded',
+      timeout: 30000,
+    });
+    await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => null);
+    await page.waitForTimeout(3000);
+
+    const bodyText = await page.locator('body').innerText().catch(() => '');
+    const linkTexts = await page.locator('a[href*="/product/"], a[href*="/concept/"]').evaluateAll((elements) =>
+      elements.map((element) => (element.textContent || '').trim()).filter(Boolean)
+    ).catch(() => []);
+    const titles = [...new Set(
+      linkTexts
+        .map((text) => text.replace(/\s+/g, ' ').trim())
+        .filter((text) =>
+          text.length >= 2 &&
+          text.length <= 90 &&
+          /[A-Za-z]/.test(text) &&
+          !/^(Free|Demo|Included|Add to Cart|Wishlist|Learn More|PS4|PS5)$/i.test(text)
+        )
+    )];
+
+    return {
+      titles,
+      textSnippet: normalizeText(bodyText).slice(0, 500),
+    };
+  } finally {
+    await context.close();
+  }
 }
 
 async function fetchPsnProfileSummary(username) {
