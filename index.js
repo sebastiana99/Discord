@@ -629,6 +629,90 @@ function parseCandidateTitlesFromSection(sectionText) {
   return [...new Set(titles)];
 }
 
+function parseOfficialFreeToPlayTitlesFromText(rawText) {
+  const lines = rawText
+    .split('\n')
+    .map((line) => normalizeText(line))
+    .filter(Boolean);
+  const titles = [];
+  let inSection = false;
+
+  for (const line of lines) {
+    if (/^Free to play$/i.test(line)) {
+      inSection = true;
+      continue;
+    }
+
+    if (!inSection) {
+      continue;
+    }
+
+    if (/^(Demos|See more|Monthly Picks|PlayStation Indies|Games to wishlist)$/i.test(line)) {
+      break;
+    }
+
+    if (/^(Free|Demo|Premium|ImageImage|PS4|PS5)$/i.test(line)) {
+      continue;
+    }
+
+    if (/^\$?\d/.test(line) || /save \d+%/i.test(line) || /~~/.test(line)) {
+      continue;
+    }
+
+    if (line.length < 2 || line.length > 80 || !/[A-Za-z]/.test(line)) {
+      continue;
+    }
+
+    titles.push(line);
+  }
+
+  return [...new Set(titles)];
+}
+
+function parseOfficialPlayStationPlusTitlesFromText(rawText) {
+  const lines = rawText
+    .split('\n')
+    .map((line) => normalizeText(line))
+    .filter(Boolean);
+  const titles = [];
+  let inSection = false;
+
+  for (const line of lines) {
+    if (/^(Game Catalog|Game trials)$/i.test(line)) {
+      inSection = true;
+      continue;
+    }
+
+    if (!inSection) {
+      continue;
+    }
+
+    if (/^(Choose your membership plan|Premium|Extra|Essential|Frequently asked questions)$/i.test(line)) {
+      break;
+    }
+
+    if (/^[A-Z]$/.test(line) || /^###$/.test(line)) {
+      continue;
+    }
+
+    if (/^(Find your next game|Browse the PlayStation Plus game finder|Player guide|Discover great games)/i.test(line)) {
+      continue;
+    }
+
+    if (/^(Classics Catalog|Monthly games|Game trials|Cloud Streaming|Ubisoft\+ Classics|Online Multiplayer|Exclusive Discounts|Share Play|Cloud Storage|Exclusive Content|Sony Pictures Catalog)$/i.test(line)) {
+      continue;
+    }
+
+    if (line.length < 2 || line.length > 90 || !/[A-Za-z]/.test(line)) {
+      continue;
+    }
+
+    titles.push(line);
+  }
+
+  return [...new Set(titles)];
+}
+
 async function fetchLatestTrophy(username) {
   const browser = await getBrowser();
   const context = await browser.newContext({
@@ -847,63 +931,31 @@ async function fetchUserPlatinumTitles(username) {
 }
 
 async function fetchOfficialPlayStationPlusTitles() {
-  const browser = await getBrowser();
-  const context = await browser.newContext({
-    userAgent:
-      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-    viewport: { width: 1440, height: 900 },
-    locale: 'en-US',
+  const response = await axios.get(PLAYSTATION_PLUS_GAMES_URL, {
+    timeout: 20000,
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+      Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+      'Accept-Language': 'en-US,en;q=0.9',
+    },
   });
-
-  const page = await context.newPage();
-
-  try {
-    await page.goto(PLAYSTATION_PLUS_GAMES_URL, {
-      waitUntil: 'domcontentloaded',
-      timeout: 30000,
-    });
-    await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => null);
-    await page.waitForTimeout(2000);
-
-    const bodyText = await page.locator('body').innerText().catch(() => '');
-    const normalizedText = normalizeText(bodyText);
-    const sectionMatch = normalizedText.match(/Game Catalog\s+(.+?)(?:Classics Catalog|Monthly Games|Cloud Streaming|Ubisoft\+ Classics|$)/i);
-    const sectionText = sectionMatch ? sectionMatch[1] : normalizedText;
-
-    return parseCandidateTitlesFromSection(sectionText);
-  } finally {
-    await context.close();
-  }
+  const $ = cheerio.load(response.data);
+  const rawText = $('body').text();
+  return parseOfficialPlayStationPlusTitlesFromText(rawText);
 }
 
 async function fetchOfficialFreeToPlayTitles() {
-  const browser = await getBrowser();
-  const context = await browser.newContext({
-    userAgent:
-      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-    viewport: { width: 1440, height: 900 },
-    locale: 'en-US',
+  const response = await axios.get(PLAYSTATION_STORE_COLLECTIONS_URL, {
+    timeout: 20000,
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+      Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+      'Accept-Language': 'en-US,en;q=0.9',
+    },
   });
-
-  const page = await context.newPage();
-
-  try {
-    await page.goto(PLAYSTATION_STORE_COLLECTIONS_URL, {
-      waitUntil: 'domcontentloaded',
-      timeout: 30000,
-    });
-    await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => null);
-    await page.waitForTimeout(2000);
-
-    const bodyText = await page.locator('body').innerText().catch(() => '');
-    const normalizedText = normalizeText(bodyText);
-    const sectionMatch = normalizedText.match(/Free to Play\s+(.+?)(?:Demos|Deals|Editors' Choice|$)/i);
-    const sectionText = sectionMatch ? sectionMatch[1] : normalizedText;
-
-    return parseCandidateTitlesFromSection(sectionText);
-  } finally {
-    await context.close();
-  }
+  const $ = cheerio.load(response.data);
+  const rawText = $('body').text();
+  return parseOfficialFreeToPlayTitlesFromText(rawText);
 }
 
 async function fetchPsnProfileSummary(username) {
