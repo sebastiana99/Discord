@@ -153,9 +153,32 @@ function loadWheels() {
     const raw = fs.readFileSync(WHEELS_FILE, 'utf8');
     const parsed = raw ? JSON.parse(raw) : {};
 
+    const normalizeEntries = (entries) =>
+      (Array.isArray(entries) ? entries : [])
+        .map((entry) => {
+          if (typeof entry === 'string') {
+            return {
+              title: entry,
+              addedBy: null,
+              addedAt: null,
+            };
+          }
+
+          if (entry && typeof entry.title === 'string') {
+            return {
+              title: entry.title,
+              addedBy: entry.addedBy || null,
+              addedAt: entry.addedAt || null,
+            };
+          }
+
+          return null;
+        })
+        .filter(Boolean);
+
     return {
-      movies: Array.isArray(parsed.movies) ? parsed.movies : [],
-      music: Array.isArray(parsed.music) ? parsed.music : [],
+      movies: normalizeEntries(parsed.movies),
+      music: normalizeEntries(parsed.music),
     };
   } catch (error) {
     console.error('Failed to load wheels:', error.message);
@@ -1598,27 +1621,37 @@ function normalizeWheelEntry(value) {
   return normalizeText(value).toLowerCase();
 }
 
-function addWheelEntry(type, value) {
+function addWheelEntry(type, value, userId) {
   const trimmedValue = normalizeText(value);
 
   if (!trimmedValue) {
     return { kind: 'invalid' };
   }
 
-  const exists = wheels[type].some((entry) => normalizeWheelEntry(entry) === normalizeWheelEntry(trimmedValue));
+  const exists = wheels[type].some((entry) => normalizeWheelEntry(entry.title) === normalizeWheelEntry(trimmedValue));
 
   if (exists) {
     return { kind: 'duplicate', value: trimmedValue };
   }
 
-  wheels[type].push(trimmedValue);
+  const currentUserEntries = wheels[type].filter((entry) => entry.addedBy === userId).length;
+
+  if (currentUserEntries >= 3) {
+    return { kind: 'limit', limit: 3 };
+  }
+
+  wheels[type].push({
+    title: trimmedValue,
+    addedBy: userId,
+    addedAt: new Date().toISOString(),
+  });
   saveWheels();
   return { kind: 'added', value: trimmedValue, size: wheels[type].length };
 }
 
 function removeWheelEntry(type, value) {
   const trimmedValue = normalizeText(value);
-  const index = wheels[type].findIndex((entry) => normalizeWheelEntry(entry) === normalizeWheelEntry(trimmedValue));
+  const index = wheels[type].findIndex((entry) => normalizeWheelEntry(entry.title) === normalizeWheelEntry(trimmedValue));
 
   if (index === -1) {
     return { kind: 'missing', value: trimmedValue };
@@ -1626,7 +1659,7 @@ function removeWheelEntry(type, value) {
 
   const [removed] = wheels[type].splice(index, 1);
   saveWheels();
-  return { kind: 'removed', value: removed, size: wheels[type].length };
+  return { kind: 'removed', value: removed.title, size: wheels[type].length };
 }
 
 function spinWheel(type) {
@@ -1637,7 +1670,7 @@ function spinWheel(type) {
   const index = Math.floor(Math.random() * wheels[type].length);
   const [picked] = wheels[type].splice(index, 1);
   saveWheels();
-  return { kind: 'picked', value: picked, remaining: wheels[type].length };
+  return { kind: 'picked', value: picked.title, remaining: wheels[type].length };
 }
 
 function isSessionReactionTarget(reaction) {
@@ -2807,22 +2840,26 @@ client.on('messageCreate', async (message) => {
       return message.reply(`Use: \`${command} <title>\``);
     }
 
-    const result = addWheelEntry(type, value);
+      const result = addWheelEntry(type, value, message.author.id);
 
     if (result.kind === 'invalid') {
       return message.reply(`Please provide a valid title for the ${getWheelLabel(type)}.`);
     }
 
-    if (result.kind === 'duplicate') {
-      return message.reply(`**${result.value}** is already in the ${getWheelLabel(type)}.`);
-    }
+      if (result.kind === 'duplicate') {
+        return message.reply(`**${result.value}** is already in the ${getWheelLabel(type)}.`);
+      }
+
+      if (result.kind === 'limit') {
+        return message.reply(`You can only have **${result.limit}** entries in the ${getWheelLabel(type)} at one time.`);
+      }
 
     return message.reply(`Added **${result.value}** to the ${getWheelLabel(type)}. Current total: **${result.size}**.`);
   }
 
   if (command === '!movielist' || command === '!musiclist') {
     const type = command === '!movielist' ? 'movies' : 'music';
-    const entries = wheels[type];
+      const entries = wheels[type];
 
     if (entries.length === 0) {
       return message.reply(`The ${getWheelLabel(type)} is currently empty.`);
@@ -2831,9 +2868,9 @@ client.on('messageCreate', async (message) => {
     return message.reply({
       embeds: [
         {
-          color: EMBED_COLOR,
-          title: type === 'movies' ? 'Movie Wheel' : 'Music Wheel',
-          description: entries.slice(0, 25).map((entry, index) => `${index + 1}. ${entry}`).join('\n'),
+            color: EMBED_COLOR,
+            title: type === 'movies' ? 'Movie Wheel' : 'Music Wheel',
+            description: entries.slice(0, 25).map((entry, index) => `${index + 1}. ${entry.title}`).join('\n'),
           footer: {
             text: entries.length > 25
               ? `Jarvis | Showing 25 of ${entries.length} entries`
