@@ -58,6 +58,7 @@ const OWNER_USER_ID = '592074887913406486';
 const DATA_DIR = process.env.RAILWAY_VOLUME_MOUNT_PATH || path.join(__dirname, 'data');
 const PSN_REGISTRATIONS_FILE = path.join(DATA_DIR, 'psn-registrations.json');
 const SESSION_REGISTRATIONS_FILE = path.join(DATA_DIR, 'session-registrations.json');
+const WHEELS_FILE = path.join(DATA_DIR, 'wheels.json');
 const PLAYSTATION_NEWS_STATE_FILE = path.join(DATA_DIR, 'playstation-news-state.json');
 const PLAYSTATION_PLUS_STATE_FILE = path.join(DATA_DIR, 'playstation-plus-state.json');
 const SERVER_SHUTDOWNS_STATE_FILE = path.join(DATA_DIR, 'server-shutdowns-state.json');
@@ -78,6 +79,7 @@ const HUNTER_RANKS = [
 ];
 let psnRegistrations = loadPsnRegistrations();
 let sessionRegistrations = loadSessionRegistrations();
+let wheels = loadWheels();
 
 function ensureDataDirectory() {
   try {
@@ -134,6 +136,42 @@ function saveSessionRegistrations() {
     fs.writeFileSync(SESSION_REGISTRATIONS_FILE, JSON.stringify(sessionRegistrations, null, 2));
   } catch (error) {
     console.error('Failed to save session registrations:', error.message);
+  }
+}
+
+function loadWheels() {
+  try {
+    ensureDataDirectory();
+
+    if (!fs.existsSync(WHEELS_FILE)) {
+      return {
+        movies: [],
+        music: [],
+      };
+    }
+
+    const raw = fs.readFileSync(WHEELS_FILE, 'utf8');
+    const parsed = raw ? JSON.parse(raw) : {};
+
+    return {
+      movies: Array.isArray(parsed.movies) ? parsed.movies : [],
+      music: Array.isArray(parsed.music) ? parsed.music : [],
+    };
+  } catch (error) {
+    console.error('Failed to load wheels:', error.message);
+    return {
+      movies: [],
+      music: [],
+    };
+  }
+}
+
+function saveWheels() {
+  try {
+    ensureDataDirectory();
+    fs.writeFileSync(WHEELS_FILE, JSON.stringify(wheels, null, 2));
+  } catch (error) {
+    console.error('Failed to save wheels:', error.message);
   }
 }
 
@@ -960,7 +998,7 @@ async function fetchOfficialPlayStationPlusTitles() {
           text.length >= 2 &&
           text.length <= 90 &&
           /[A-Za-z]/.test(text) &&
-          !/^(Overview|What's new on PlayStation Plus|Monthly games|Game Catalog|Classics Catalog|Game trials|Discover more|Learn more|Find your next game|Browse the PlayStation Plus game finder|Player guide|Premium|Extra|Essential|Subscribe|Included)$/i.test(text)
+          !/^(Overview|What's new on PlayStation Plus|Monthly games|Game Catalog|Classics Catalog|Game trials|Discover more|Learn more|Find your next game|Browse the PlayStation Plus game finder|Player guide|Premium|Extra|Essential|Subscribe|Included|See All|Explore)$/i.test(text)
         )
     )];
 
@@ -1552,6 +1590,56 @@ function getSessionRegistration(guildId, messageId) {
   return sessionRegistrations[getSessionRegistrationKey(guildId, messageId)] || null;
 }
 
+function getWheelLabel(type) {
+  return type === 'movies' ? 'movie wheel' : 'music wheel';
+}
+
+function normalizeWheelEntry(value) {
+  return normalizeText(value).toLowerCase();
+}
+
+function addWheelEntry(type, value) {
+  const trimmedValue = normalizeText(value);
+
+  if (!trimmedValue) {
+    return { kind: 'invalid' };
+  }
+
+  const exists = wheels[type].some((entry) => normalizeWheelEntry(entry) === normalizeWheelEntry(trimmedValue));
+
+  if (exists) {
+    return { kind: 'duplicate', value: trimmedValue };
+  }
+
+  wheels[type].push(trimmedValue);
+  saveWheels();
+  return { kind: 'added', value: trimmedValue, size: wheels[type].length };
+}
+
+function removeWheelEntry(type, value) {
+  const trimmedValue = normalizeText(value);
+  const index = wheels[type].findIndex((entry) => normalizeWheelEntry(entry) === normalizeWheelEntry(trimmedValue));
+
+  if (index === -1) {
+    return { kind: 'missing', value: trimmedValue };
+  }
+
+  const [removed] = wheels[type].splice(index, 1);
+  saveWheels();
+  return { kind: 'removed', value: removed, size: wheels[type].length };
+}
+
+function spinWheel(type) {
+  if (wheels[type].length === 0) {
+    return { kind: 'empty' };
+  }
+
+  const index = Math.floor(Math.random() * wheels[type].length);
+  const [picked] = wheels[type].splice(index, 1);
+  saveWheels();
+  return { kind: 'picked', value: picked, remaining: wheels[type].length };
+}
+
 function isSessionReactionTarget(reaction) {
   if (!reaction.message?.guildId || !reaction.message?.id) {
     return false;
@@ -1908,11 +1996,21 @@ function createHelpEmbed() {
             value: 'Suggests a random official free-to-play or PlayStation Plus game, filtered against your saved PSN registration when possible.',
             inline: false,
           },
-            {
-              name: '!goty <username>',
-              value: 'Shows the PSN PlatHub Game of the Year page summary for a player.',
-              inline: false,
-            },
+          {
+            name: '!movieadd / !moviespin / !movielist',
+            value: 'Adds movies to a shared wheel, spins one at random, and removes the picked movie automatically.',
+            inline: false,
+          },
+          {
+            name: '!musicadd / !musicspin / !musiclist',
+            value: 'Adds music to a shared wheel, spins one at random, and removes the picked track automatically.',
+            inline: false,
+          },
+              {
+                name: '!goty <username>',
+                value: 'Shows the PSN PlatHub Game of the Year page summary for a player.',
+                inline: false,
+              },
         {
           name: '!az <username>',
           value: 'Shows the PSN PlatHub Alphabet Challenge summary for a player.',
@@ -2699,6 +2797,109 @@ client.on('messageCreate', async (message) => {
       );
       return message.reply('I could not build a random suggestion right now. Please try again in a moment.');
     }
+  }
+
+  if (command === '!movieadd' || command === '!musicadd') {
+    const type = command === '!movieadd' ? 'movies' : 'music';
+    const value = message.content.slice(command.length).trim();
+
+    if (!value) {
+      return message.reply(`Use: \`${command} <title>\``);
+    }
+
+    const result = addWheelEntry(type, value);
+
+    if (result.kind === 'invalid') {
+      return message.reply(`Please provide a valid title for the ${getWheelLabel(type)}.`);
+    }
+
+    if (result.kind === 'duplicate') {
+      return message.reply(`**${result.value}** is already in the ${getWheelLabel(type)}.`);
+    }
+
+    return message.reply(`Added **${result.value}** to the ${getWheelLabel(type)}. Current total: **${result.size}**.`);
+  }
+
+  if (command === '!movielist' || command === '!musiclist') {
+    const type = command === '!movielist' ? 'movies' : 'music';
+    const entries = wheels[type];
+
+    if (entries.length === 0) {
+      return message.reply(`The ${getWheelLabel(type)} is currently empty.`);
+    }
+
+    return message.reply({
+      embeds: [
+        {
+          color: EMBED_COLOR,
+          title: type === 'movies' ? 'Movie Wheel' : 'Music Wheel',
+          description: entries.slice(0, 25).map((entry, index) => `${index + 1}. ${entry}`).join('\n'),
+          footer: {
+            text: entries.length > 25
+              ? `Jarvis | Showing 25 of ${entries.length} entries`
+              : `Jarvis | ${entries.length} entries`,
+          },
+          timestamp: new Date().toISOString(),
+        },
+      ],
+    });
+  }
+
+  if (command === '!movieremove' || command === '!musicremove') {
+    const type = command === '!movieremove' ? 'movies' : 'music';
+    const value = message.content.slice(command.length).trim();
+
+    if (!value) {
+      return message.reply(`Use: \`${command} <title>\``);
+    }
+
+    const result = removeWheelEntry(type, value);
+
+    if (result.kind === 'missing') {
+      return message.reply(`I could not find **${result.value}** in the ${getWheelLabel(type)}.`);
+    }
+
+    return message.reply(`Removed **${result.value}** from the ${getWheelLabel(type)}. Remaining: **${result.size}**.`);
+  }
+
+  if (command === '!moviespin' || command === '!musicspin') {
+    const type = command === '!moviespin' ? 'movies' : 'music';
+    const result = spinWheel(type);
+
+    if (result.kind === 'empty') {
+      return message.reply(`The ${getWheelLabel(type)} is currently empty.`);
+    }
+
+    return message.reply({
+      embeds: [
+        {
+          color: EMBED_COLOR,
+          title: type === 'movies' ? 'Movie Wheel Picked' : 'Music Wheel Picked',
+          description: `Jarvis picked **${result.value}**.`,
+          fields: [
+            {
+              name: 'Picked',
+              value: result.value,
+              inline: false,
+            },
+            {
+              name: 'Remaining Entries',
+              value: String(result.remaining),
+              inline: true,
+            },
+            {
+              name: 'Status',
+              value: 'Removed from the wheel',
+              inline: true,
+            },
+          ],
+          footer: {
+            text: 'Jarvis | Wheel Spin',
+          },
+          timestamp: new Date().toISOString(),
+        },
+      ],
+    });
   }
 
   if (command === '!goty') {
