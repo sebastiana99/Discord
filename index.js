@@ -146,7 +146,6 @@ function loadWheels() {
     if (!fs.existsSync(WHEELS_FILE)) {
       return {
         movies: [],
-        music: [],
       };
     }
 
@@ -178,13 +177,11 @@ function loadWheels() {
 
     return {
       movies: normalizeEntries(parsed.movies),
-      music: normalizeEntries(parsed.music),
     };
   } catch (error) {
     console.error('Failed to load wheels:', error.message);
     return {
       movies: [],
-      music: [],
     };
   }
 }
@@ -1614,7 +1611,7 @@ function getSessionRegistration(guildId, messageId) {
 }
 
 function getWheelLabel(type) {
-  return type === 'movies' ? 'movie wheel' : 'music wheel';
+  return 'movie wheel';
 }
 
 function normalizeWheelEntry(value) {
@@ -2032,11 +2029,6 @@ function createHelpEmbed() {
           {
             name: '!movieadd / !moviespin / !movielist',
             value: 'Adds movies to a shared wheel, spins one at random, and removes the picked movie automatically.',
-            inline: false,
-          },
-          {
-            name: '!musicadd / !musicspin / !musiclist',
-            value: 'Adds music to a shared wheel, spins one at random, and removes the picked track automatically.',
             inline: false,
           },
               {
@@ -2832,8 +2824,8 @@ client.on('messageCreate', async (message) => {
     }
   }
 
-  if (command === '!movieadd' || command === '!musicadd') {
-    const type = command === '!movieadd' ? 'movies' : 'music';
+  if (command === '!movieadd') {
+    const type = 'movies';
     const value = message.content.slice(command.length).trim();
 
     if (!value) {
@@ -2857,33 +2849,33 @@ client.on('messageCreate', async (message) => {
     return message.reply(`Added **${result.value}** to the ${getWheelLabel(type)}. Current total: **${result.size}**.`);
   }
 
-  if (command === '!movielist' || command === '!musiclist') {
-    const type = command === '!movielist' ? 'movies' : 'music';
-      const entries = wheels[type];
+  if (command === '!movielist') {
+    const type = 'movies';
+    const entries = wheels[type];
 
     if (entries.length === 0) {
       return message.reply(`The ${getWheelLabel(type)} is currently empty.`);
     }
 
     return message.reply({
-      embeds: [
-        {
+        embeds: [
+          {
             color: EMBED_COLOR,
-            title: type === 'movies' ? 'Movie Wheel' : 'Music Wheel',
+            title: 'Movie Wheel',
             description: entries.slice(0, 25).map((entry, index) => `${index + 1}. ${entry.title}`).join('\n'),
-          footer: {
-            text: entries.length > 25
-              ? `Jarvis | Showing 25 of ${entries.length} entries`
-              : `Jarvis | ${entries.length} entries`,
-          },
+            footer: {
+              text: entries.length > 25
+                ? `Jarvis | Showing 25 of ${entries.length} entries`
+                : `Jarvis | ${entries.length} entries`,
+            },
           timestamp: new Date().toISOString(),
         },
       ],
     });
   }
 
-  if (command === '!movieremove' || command === '!musicremove') {
-    const type = command === '!movieremove' ? 'movies' : 'music';
+  if (command === '!movieremove') {
+    const type = 'movies';
     const value = message.content.slice(command.length).trim();
 
     if (!value) {
@@ -2899,8 +2891,8 @@ client.on('messageCreate', async (message) => {
     return message.reply(`Removed **${result.value}** from the ${getWheelLabel(type)}. Remaining: **${result.size}**.`);
   }
 
-  if (command === '!moviespin' || command === '!musicspin') {
-    const type = command === '!moviespin' ? 'movies' : 'music';
+  if (command === '!moviespin') {
+    const type = 'movies';
     const result = spinWheel(type);
 
     if (result.kind === 'empty') {
@@ -2908,11 +2900,11 @@ client.on('messageCreate', async (message) => {
     }
 
     return message.reply({
-      embeds: [
-        {
-          color: EMBED_COLOR,
-          title: type === 'movies' ? 'Movie Wheel Picked' : 'Music Wheel Picked',
-          description: `Jarvis picked **${result.value}**.`,
+        embeds: [
+          {
+            color: EMBED_COLOR,
+            title: 'Movie Wheel Picked',
+            description: `Jarvis picked **${result.value}**.`,
           fields: [
             {
               name: 'Picked',
