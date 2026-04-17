@@ -54,6 +54,7 @@ const PLAYSTATION_NEWS_CHANNEL_ID = '1482550865847124101';
 const PLAYSTATION_PLUS_CHANNEL_ID = '1482550945945751764';
 const SERVER_SHUTDOWNS_CHANNEL_ID = '1485745504100028436';
 const BOOSTING_SESSIONS_CATEGORY_ID = '1482552761403965511';
+const MOVIE_WHEEL_SPINNER_ROLE_ID = '1482454550563655841';
 const OWNER_USER_ID = '592074887913406486';
 const DATA_DIR = process.env.RAILWAY_VOLUME_MOUNT_PATH || path.join(__dirname, 'data');
 const PSN_REGISTRATIONS_FILE = path.join(DATA_DIR, 'psn-registrations.json');
@@ -1557,6 +1558,14 @@ function isAdminMember(member) {
   return ADMIN_ROLE_IDS.some((roleId) => member.roles.cache.has(roleId));
 }
 
+function canSpinMovieWheel(member) {
+  if (!member) {
+    return false;
+  }
+
+  return member.roles.cache.has(MOVIE_WHEEL_SPINNER_ROLE_ID);
+}
+
 function saveUserPsnRegistration(member, username, platinumCount, trophyLevel = null) {
   psnRegistrations[member.id] = {
     discordTag: member.user.tag,
@@ -2027,8 +2036,8 @@ function createHelpEmbed() {
             inline: false,
           },
           {
-            name: '!movieadd / !moviespin / !movielist',
-            value: 'Adds movies to a shared wheel, spins one at random, and removes the picked movie automatically.',
+            name: '!movieadd / !movielist / !movieremove / !moviespin / !movieclear',
+            value: 'Manages the shared movie wheel. Spinning is limited to the movie wheel role, and clearing is staff-only.',
             inline: false,
           },
               {
@@ -2892,6 +2901,14 @@ client.on('messageCreate', async (message) => {
   }
 
   if (command === '!moviespin') {
+    if (!message.guild || !message.member) {
+      return message.reply('This command only works inside the server.');
+    }
+
+    if (!canSpinMovieWheel(message.member)) {
+      return message.reply('You do not have permission to spin the movie wheel.');
+    }
+
     const type = 'movies';
     const result = spinWheel(type);
 
@@ -2929,6 +2946,24 @@ client.on('messageCreate', async (message) => {
         },
       ],
     });
+  }
+
+  if (command === '!movieclear') {
+    if (!isAdminMember(message.member)) {
+      return message.reply('Only Executive Officers and The Mechanic can clear the movie wheel.');
+    }
+
+    const type = 'movies';
+    const clearedCount = wheels[type].length;
+
+    if (clearedCount === 0) {
+      return message.reply(`The ${getWheelLabel(type)} is already empty.`);
+    }
+
+    wheels[type] = [];
+    saveWheels();
+
+    return message.reply(`Cleared **${clearedCount}** entr${clearedCount === 1 ? 'y' : 'ies'} from the ${getWheelLabel(type)}.`);
   }
 
   if (command === '!goty') {
