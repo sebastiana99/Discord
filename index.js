@@ -2037,7 +2037,7 @@ function createHelpEmbed() {
           },
           {
             name: '!movieadd / !movielist / !movieremove / !moviespin / !movieclear',
-            value: 'Manages the shared movie wheel. Spinning is limited to the movie wheel role, and clearing is staff-only.',
+            value: 'Manages the shared movie wheel. Spinning is limited to the movie wheel role, and staff can clear the full wheel or one member’s entries.',
             inline: false,
           },
               {
@@ -2954,6 +2954,21 @@ client.on('messageCreate', async (message) => {
     }
 
     const type = 'movies';
+    const targetMember = message.mentions.members.first();
+
+    if (targetMember) {
+      const beforeCount = wheels[type].length;
+      wheels[type] = wheels[type].filter((entry) => entry.addedBy !== targetMember.id);
+      const clearedCount = beforeCount - wheels[type].length;
+
+      if (clearedCount === 0) {
+        return message.reply(`I could not find any entries from ${targetMember}.`);
+      }
+
+      saveWheels();
+      return message.reply(`Cleared **${clearedCount}** entr${clearedCount === 1 ? 'y' : 'ies'} from ${targetMember}'s movie wheel entries.`);
+    }
+
     const clearedCount = wheels[type].length;
 
     if (clearedCount === 0) {
