@@ -2224,8 +2224,8 @@ function createHelpEmbed() {
             inline: false,
           },
           {
-            name: '!playlistsetup / !songadd / !playlistlink',
-            value: 'Creates the server Spotify playlist, adds songs to it, and shows the playlist link.',
+            name: '!playlistsetup / !songadd / !playlistlink / !spotifydebug',
+            value: 'Creates the server Spotify playlist, adds songs to it, shows the playlist link, and provides admin-only Spotify config diagnostics.',
             inline: false,
           },
               {
@@ -3053,6 +3053,52 @@ client.on('messageCreate', async (message) => {
           ],
           footer: {
             text: 'Jarvis | Spotify Playlist',
+          },
+          timestamp: new Date().toISOString(),
+        },
+      ],
+    });
+  }
+
+  if (command === '!spotifydebug') {
+    if (!isAdminMember(message.member)) {
+      return message.reply('Only Executive Officers and The Mechanic can use Spotify debug.');
+    }
+
+    return message.reply({
+      embeds: [
+        {
+          color: 0x1db954,
+          title: 'Spotify Debug',
+          fields: [
+            {
+              name: 'SPOTIFY_CLIENT_ID',
+              value: SPOTIFY_CLIENT_ID ? 'Present' : 'Missing',
+              inline: true,
+            },
+            {
+              name: 'SPOTIFY_CLIENT_SECRET',
+              value: SPOTIFY_CLIENT_SECRET ? 'Present' : 'Missing',
+              inline: true,
+            },
+            {
+              name: 'SPOTIFY_REFRESH_TOKEN',
+              value: SPOTIFY_REFRESH_TOKEN ? 'Present' : 'Missing',
+              inline: true,
+            },
+            {
+              name: 'Configured',
+              value: isSpotifyConfigured() ? 'Yes' : 'No',
+              inline: true,
+            },
+            {
+              name: 'Playlist Name',
+              value: DEFAULT_SPOTIFY_PLAYLIST_NAME || 'Not set',
+              inline: false,
+            },
+          ],
+          footer: {
+            text: 'Jarvis | Spotify Debug',
           },
           timestamp: new Date().toISOString(),
         },
