@@ -37,6 +37,8 @@ const PLAYSTATION_BLOG_BASE_URL = 'https://blog.playstation.com';
 const PUSHSQUARE_BASE_URL = 'https://www.pushsquare.com';
 const PLAYSTATION_PLUS_GAMES_URL = 'https://www.playstation.com/en-us/ps-plus/games/';
 const PLAYSTATION_STORE_COLLECTIONS_URL = 'https://store.playstation.com/en-us/category/30749d2c-738f-4c36-9d6b-7ed517cca9ee/';
+const SPOTIFY_API_BASE_URL = 'https://api.spotify.com/v1';
+const SPOTIFY_ACCOUNTS_TOKEN_URL = 'https://accounts.spotify.com/api/token';
 const TROPHY_CACHE_TTL_MS = 10 * 60 * 1000;
 const PROFILE_CACHE_TTL_MS = 60 * 60 * 1000;
 const AUDIT_MEMBER_CACHE_TTL_MS = 60 * 1000;
@@ -60,10 +62,15 @@ const DATA_DIR = process.env.RAILWAY_VOLUME_MOUNT_PATH || path.join(__dirname, '
 const PSN_REGISTRATIONS_FILE = path.join(DATA_DIR, 'psn-registrations.json');
 const SESSION_REGISTRATIONS_FILE = path.join(DATA_DIR, 'session-registrations.json');
 const WHEELS_FILE = path.join(DATA_DIR, 'wheels.json');
+const SPOTIFY_PLAYLIST_STATE_FILE = path.join(DATA_DIR, 'spotify-playlist.json');
 const PLAYSTATION_NEWS_STATE_FILE = path.join(DATA_DIR, 'playstation-news-state.json');
 const PLAYSTATION_PLUS_STATE_FILE = path.join(DATA_DIR, 'playstation-plus-state.json');
 const SERVER_SHUTDOWNS_STATE_FILE = path.join(DATA_DIR, 'server-shutdowns-state.json');
 const PLAYSTATION_NEWS_POLL_INTERVAL_MS = 30 * 60 * 1000;
+const SPOTIFY_CLIENT_ID = process.env.SPOTIFY_CLIENT_ID || '';
+const SPOTIFY_CLIENT_SECRET = process.env.SPOTIFY_CLIENT_SECRET || '';
+const SPOTIFY_REFRESH_TOKEN = process.env.SPOTIFY_REFRESH_TOKEN || '';
+const DEFAULT_SPOTIFY_PLAYLIST_NAME = process.env.SPOTIFY_PLAYLIST_NAME || 'No BS Trophy Huntin Community Playlist';
 const HUNTER_RANKS = [
   { name: 'Novice Hunter', min: 1, max: 99 },
   { name: 'Rising Hunter', min: 100, max: 199 },
@@ -81,6 +88,8 @@ const HUNTER_RANKS = [
 let psnRegistrations = loadPsnRegistrations();
 let sessionRegistrations = loadSessionRegistrations();
 let wheels = loadWheels();
+let spotifyPlaylistState = loadSpotifyPlaylistState();
+let spotifyAccessTokenCache = null;
 
 function ensureDataDirectory() {
   try {
@@ -193,6 +202,54 @@ function saveWheels() {
     fs.writeFileSync(WHEELS_FILE, JSON.stringify(wheels, null, 2));
   } catch (error) {
     console.error('Failed to save wheels:', error.message);
+  }
+}
+
+function loadSpotifyPlaylistState() {
+  try {
+    ensureDataDirectory();
+
+    if (!fs.existsSync(SPOTIFY_PLAYLIST_STATE_FILE)) {
+      return {
+        playlistId: null,
+        playlistUrl: null,
+        playlistName: null,
+        updatedAt: null,
+      };
+    }
+
+    const raw = fs.readFileSync(SPOTIFY_PLAYLIST_STATE_FILE, 'utf8');
+    const parsed = raw ? JSON.parse(raw) : {};
+    return {
+      playlistId: parsed.playlistId || null,
+      playlistUrl: parsed.playlistUrl || null,
+      playlistName: parsed.playlistName || null,
+      updatedAt: parsed.updatedAt || null,
+    };
+  } catch (error) {
+    console.error('Failed to load Spotify playlist state:', error.message);
+    return {
+      playlistId: null,
+      playlistUrl: null,
+      playlistName: null,
+      updatedAt: null,
+    };
+  }
+}
+
+function saveSpotifyPlaylistState(state) {
+  try {
+    spotifyPlaylistState = {
+      playlistId: state.playlistId || null,
+      playlistUrl: state.playlistUrl || null,
+      playlistName: state.playlistName || null,
+      updatedAt: state.updatedAt || new Date().toISOString(),
+    };
+
+    ensureDataDirectory();
+    fs.writeFileSync(SPOTIFY_PLAYLIST_STATE_FILE, JSON.stringify(spotifyPlaylistState, null, 2));
+  } catch (error) {
+    console.error('Failed to save Spotify playlist state:', error.message);
   }
 }
 
@@ -1566,6 +1623,132 @@ function canSpinMovieWheel(member) {
   return member.roles.cache.has(MOVIE_WHEEL_SPINNER_ROLE_ID);
 }
 
+function isSpotifyConfigured() {
+  return Boolean(SPOTIFY_CLIENT_ID && SPOTIFY_CLIENT_SECRET && SPOTIFY_REFRESH_TOKEN);
+}
+
+async function getSpotifyAccessToken() {
+  if (!isSpotifyConfigured()) {
+    throw new Error('Spotify credentials are not configured.');
+  }
+
+  if (spotifyAccessTokenCache && spotifyAccessTokenCache.expiresAt > Date.now() + 60 * 1000) {
+    return spotifyAccessTokenCache.token;
+  }
+
+  const body = new URLSearchParams({
+    grant_type: 'refresh_token',
+    refresh_token: SPOTIFY_REFRESH_TOKEN,
+  });
+
+  const basicAuth = Buffer.from(`${SPOTIFY_CLIENT_ID}:${SPOTIFY_CLIENT_SECRET}`).toString('base64');
+  const response = await axios.post(SPOTIFY_ACCOUNTS_TOKEN_URL, body.toString(), {
+    headers: {
+      Authorization: `Basic ${basicAuth}`,
+      'Content-Type': 'application/x-www-form-urlencoded',
+    },
+    timeout: 15000,
+  });
+
+  spotifyAccessTokenCache = {
+    token: response.data.access_token,
+    expiresAt: Date.now() + ((response.data.expires_in || 3600) * 1000),
+  };
+
+  return spotifyAccessTokenCache.token;
+}
+
+async function spotifyApiRequest(method, resourcePath, { params, data } = {}) {
+  const accessToken = await getSpotifyAccessToken();
+  const response = await axios({
+    method,
+    url: `${SPOTIFY_API_BASE_URL}${resourcePath}`,
+    params,
+    data,
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+    },
+    timeout: 20000,
+  });
+
+  return response.data;
+}
+
+async function ensureSpotifyPlaylist(playlistName = DEFAULT_SPOTIFY_PLAYLIST_NAME) {
+  if (spotifyPlaylistState.playlistId && spotifyPlaylistState.playlistUrl) {
+    return spotifyPlaylistState;
+  }
+
+  const playlist = await spotifyApiRequest('post', '/me/playlists', {
+    data: {
+      name: playlistName,
+      public: true,
+      description: 'Curated by Jarvis for No BS Trophy Huntin.',
+    },
+  });
+
+  const state = {
+    playlistId: playlist.id,
+    playlistUrl: playlist.external_urls?.spotify || null,
+    playlistName: playlist.name || playlistName,
+    updatedAt: new Date().toISOString(),
+  };
+
+  saveSpotifyPlaylistState(state);
+  return state;
+}
+
+async function searchSpotifyTrack(query) {
+  const data = await spotifyApiRequest('get', '/search', {
+    params: {
+      q: query,
+      type: 'track',
+      limit: 5,
+    },
+  });
+
+  const items = data?.tracks?.items || [];
+
+  if (!items.length) {
+    return null;
+  }
+
+  return items[0];
+}
+
+async function addTrackToSpotifyPlaylist(query, playlistName) {
+  const track = await searchSpotifyTrack(query);
+
+  if (!track) {
+    return { kind: 'not_found' };
+  }
+
+  const playlist = await ensureSpotifyPlaylist(playlistName);
+
+  await spotifyApiRequest('post', `/playlists/${playlist.playlistId}/items`, {
+    data: {
+      uris: [track.uri],
+    },
+  });
+
+  saveSpotifyPlaylistState({
+    ...playlist,
+    updatedAt: new Date().toISOString(),
+  });
+
+  return {
+    kind: 'added',
+    playlist,
+    track: {
+      id: track.id,
+      name: track.name,
+      artists: (track.artists || []).map((artist) => artist.name).filter(Boolean),
+      album: track.album?.name || null,
+      url: track.external_urls?.spotify || null,
+    },
+  };
+}
+
 function saveUserPsnRegistration(member, username, platinumCount, trophyLevel = null) {
   psnRegistrations[member.id] = {
     discordTag: member.user.tag,
@@ -2038,6 +2221,11 @@ function createHelpEmbed() {
           {
             name: '!movieadd / !movielist / !movieremove / !moviespin / !movieclear',
             value: 'Manages the shared movie wheel. Spinning is limited to the movie wheel role, and staff can clear the full wheel or one member’s entries.',
+            inline: false,
+          },
+          {
+            name: '!playlistsetup / !songadd / !playlistlink',
+            value: 'Creates the server Spotify playlist, adds songs to it, and shows the playlist link.',
             inline: false,
           },
               {
@@ -2727,6 +2915,149 @@ client.on('messageCreate', async (message) => {
       console.error('Error searching PowerPyx guide:', error.message);
       return message.reply('I could not reach PowerPyx right now. Please try again in a moment.');
     }
+  }
+
+  if (command === '!playlistsetup') {
+    if (!isAdminMember(message.member)) {
+      return message.reply('Only Executive Officers and The Mechanic can set up the Spotify playlist.');
+    }
+
+    if (!isSpotifyConfigured()) {
+      return message.reply('Spotify is not configured yet. Add `SPOTIFY_CLIENT_ID`, `SPOTIFY_CLIENT_SECRET`, and `SPOTIFY_REFRESH_TOKEN` in Railway first.');
+    }
+
+    const playlistName = message.content.slice(command.length).trim() || DEFAULT_SPOTIFY_PLAYLIST_NAME;
+
+    try {
+      const playlist = await ensureSpotifyPlaylist(playlistName);
+
+      return message.reply({
+        embeds: [
+          {
+            color: 0x1db954,
+            title: 'Spotify Playlist Ready',
+            description: `Jarvis is now connected to **${playlist.playlistName || playlistName}**.`,
+            fields: [
+              {
+                name: 'Playlist',
+                value: playlist.playlistName || playlistName,
+                inline: false,
+              },
+              {
+                name: 'Open Playlist',
+                value: playlist.playlistUrl ? `[Open on Spotify](${playlist.playlistUrl})` : 'Not available',
+                inline: false,
+              },
+            ],
+            footer: {
+              text: 'Jarvis | Spotify Playlist Setup',
+            },
+            timestamp: new Date().toISOString(),
+          },
+        ],
+      });
+    } catch (error) {
+      console.error('playlistsetup command failed:', error.message);
+      await notifyOwner(
+        'spotify playlist setup failed',
+        `User: ${message.author.tag}\nError: ${error.message}`
+      );
+      return message.reply('I could not create or connect the Spotify playlist right now. Please check the Spotify setup and try again.');
+    }
+  }
+
+  if (command === '!songadd') {
+    const query = message.content.slice(command.length).trim();
+
+    if (!query) {
+      return message.reply('Use: !songadd <song name or song - artist>');
+    }
+
+    if (!isSpotifyConfigured()) {
+      return message.reply('Spotify is not configured yet, so I cannot add songs right now.');
+    }
+
+    try {
+      const result = await addTrackToSpotifyPlaylist(query);
+
+      if (result.kind === 'not_found') {
+        return message.reply(`I could not find a Spotify track for \`${query}\`.`);
+      }
+
+      const artistLine = result.track.artists.length ? result.track.artists.join(', ') : 'Unknown artist';
+
+      return message.reply({
+        embeds: [
+          {
+            color: 0x1db954,
+            title: 'Song Added to Playlist',
+            description: `Jarvis added **${result.track.name}** to the server playlist.`,
+            url: result.track.url || undefined,
+            fields: [
+              {
+                name: 'Track',
+                value: result.track.name,
+                inline: false,
+              },
+              {
+                name: 'Artist',
+                value: artistLine,
+                inline: false,
+              },
+              {
+                name: 'Album',
+                value: result.track.album || 'Not available',
+                inline: false,
+              },
+              {
+                name: 'Playlist',
+                value: result.playlist.playlistUrl ? `[Open playlist](${result.playlist.playlistUrl})` : (result.playlist.playlistName || 'Configured playlist'),
+                inline: false,
+              },
+            ],
+            footer: {
+              text: 'Jarvis | Spotify Playlist',
+            },
+            timestamp: new Date().toISOString(),
+          },
+        ],
+      });
+    } catch (error) {
+      console.error('songadd command failed:', error.message);
+      await notifyOwner(
+        'spotify song add failed',
+        `User: ${message.author.tag}\nQuery: ${query}\nError: ${error.message}`
+      );
+      return message.reply('I could not add that song to Spotify right now. Please try again in a moment.');
+    }
+  }
+
+  if (command === '!playlistlink') {
+    if (!spotifyPlaylistState.playlistUrl) {
+      return message.reply('The Spotify playlist has not been set up yet.');
+    }
+
+    return message.reply({
+      embeds: [
+        {
+          color: 0x1db954,
+          title: spotifyPlaylistState.playlistName || 'Server Spotify Playlist',
+          description: 'Open the server playlist on Spotify.',
+          url: spotifyPlaylistState.playlistUrl,
+          fields: [
+            {
+              name: 'Playlist Link',
+              value: `[Open on Spotify](${spotifyPlaylistState.playlistUrl})`,
+              inline: false,
+            },
+          ],
+          footer: {
+            text: 'Jarvis | Spotify Playlist',
+          },
+          timestamp: new Date().toISOString(),
+        },
+      ],
+    });
   }
 
   if (command === '!random') {
