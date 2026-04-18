@@ -6,6 +6,7 @@
   "scripts": {
     "postinstall": "playwright install chromium",
     "start": "node index.js",
+    "spotify:token": "node spotify-refresh-token.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],
