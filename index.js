@@ -1627,6 +1627,30 @@ function isSpotifyConfigured() {
   return Boolean(SPOTIFY_CLIENT_ID && SPOTIFY_CLIENT_SECRET && SPOTIFY_REFRESH_TOKEN);
 }
 
+function formatAxiosErrorDetails(error) {
+  if (!error) {
+    return 'Unknown error';
+  }
+
+  const status = error.response?.status;
+  const data = error.response?.data;
+
+  if (data?.error?.message) {
+    return status ? `${status}: ${data.error.message}` : data.error.message;
+  }
+
+  if (typeof data === 'string' && data.trim()) {
+    return status ? `${status}: ${data}` : data;
+  }
+
+  if (data && typeof data === 'object') {
+    const serialized = JSON.stringify(data);
+    return status ? `${status}: ${serialized}` : serialized;
+  }
+
+  return status ? `${status}: ${error.message}` : error.message;
+}
+
 async function getSpotifyAccessToken() {
   if (!isSpotifyConfigured()) {
     throw new Error('Spotify credentials are not configured.');
@@ -2957,12 +2981,13 @@ client.on('messageCreate', async (message) => {
         ],
       });
     } catch (error) {
-      console.error('playlistsetup command failed:', error.message);
+      const errorDetails = formatAxiosErrorDetails(error);
+      console.error('playlistsetup command failed:', errorDetails);
       await notifyOwner(
         'spotify playlist setup failed',
-        `User: ${message.author.tag}\nError: ${error.message}`
+        `User: ${message.author.tag}\nError: ${errorDetails}`
       );
-      return message.reply('I could not create or connect the Spotify playlist right now. Please check the Spotify setup and try again.');
+      return message.reply(`I could not create or connect the Spotify playlist right now. Spotify said: ${errorDetails}`);
     }
   }
 
@@ -3023,12 +3048,13 @@ client.on('messageCreate', async (message) => {
         ],
       });
     } catch (error) {
-      console.error('songadd command failed:', error.message);
+      const errorDetails = formatAxiosErrorDetails(error);
+      console.error('songadd command failed:', errorDetails);
       await notifyOwner(
         'spotify song add failed',
-        `User: ${message.author.tag}\nQuery: ${query}\nError: ${error.message}`
+        `User: ${message.author.tag}\nQuery: ${query}\nError: ${errorDetails}`
       );
-      return message.reply('I could not add that song to Spotify right now. Please try again in a moment.');
+      return message.reply(`I could not add that song to Spotify right now. Spotify said: ${errorDetails}`);
     }
   }
 
