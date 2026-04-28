@@ -1923,6 +1923,7 @@ function setBirthdayRegistration(member, birthday) {
     month: birthday.month,
     year: birthday.year || null,
     timeZone: existing.timeZone || null,
+    customMessage: existing.customMessage || null,
     updatedAt: new Date().toISOString(),
   };
   saveBirthdays();
@@ -1936,6 +1937,21 @@ function setBirthdayTimezone(member, timeZone) {
     month: existing.month || null,
     year: existing.year || null,
     timeZone,
+    customMessage: existing.customMessage || null,
+    updatedAt: new Date().toISOString(),
+  };
+  saveBirthdays();
+}
+
+function setBirthdayCustomMessage(userId, customMessage) {
+  const existing = birthdays[userId] || {};
+  birthdays[userId] = {
+    discordTag: existing.discordTag || null,
+    day: existing.day || null,
+    month: existing.month || null,
+    year: existing.year || null,
+    timeZone: existing.timeZone || null,
+    customMessage: customMessage || null,
     updatedAt: new Date().toISOString(),
   };
   saveBirthdays();
@@ -1983,7 +1999,6 @@ async function checkAndPostBirthdays() {
     throw new Error('The birthday announcement channel could not be found or is not a text channel.');
   }
 
-  const today = getCurrentBirthdayDateParts();
   const entries = Object.entries(birthdays)
     .filter(([, birthday]) => birthday.day && birthday.month && birthday.timeZone)
     .filter(([, birthday]) => {
@@ -1999,37 +2014,35 @@ async function checkAndPostBirthdays() {
     return;
   }
 
-  const mentions = entries.map(([userId]) => `<@${userId}>`).join(' ');
-  const birthdayCount = entries.length;
-  const timezoneList = [...new Set(entries.map(([, birthday]) => birthday.timeZone).filter(Boolean))];
-  const description = birthdayCount === 1
-    ? `Happy Birthday to ${mentions}! Wishing you a fantastic day, plenty of good vibes, and an even better year ahead.`
-    : `Happy Birthday to ${mentions}! Wishing all of you a fantastic day, plenty of good vibes, and an even better year ahead.`;
-
-  await channel.send({
-    embeds: [
-      {
-        color: 0xff7bbf,
-        title: 'Birthday Celebration',
-        description,
-        fields: timezoneList.length
-          ? [
-              {
-                name: 'Birthday Time Zone',
-                value: timezoneList.join(', '),
-                inline: false,
-              },
-            ]
-          : undefined,
-        footer: {
-          text: 'Jarvis | Birthday Wishes',
-        },
-        timestamp: new Date().toISOString(),
-      },
-    ],
-  });
-
   for (const [userId, birthday] of entries) {
+    const mention = `<@${userId}>`;
+    const description = birthday.customMessage
+      ? birthday.customMessage
+      : `Happy Birthday to ${mention}! Wishing you a fantastic day, plenty of good vibes, and an even better year ahead.`;
+
+    await channel.send({
+      embeds: [
+        {
+          color: 0xff7bbf,
+          title: 'Birthday Celebration',
+          description,
+          fields: birthday.timeZone
+            ? [
+                {
+                  name: 'Birthday Time Zone',
+                  value: birthday.timeZone,
+                  inline: false,
+                },
+              ]
+            : undefined,
+          footer: {
+            text: 'Jarvis | Birthday Wishes',
+          },
+          timestamp: new Date().toISOString(),
+        },
+      ],
+    });
+
     const localToday = getCurrentBirthdayDateParts(birthday.timeZone);
     birthdayState.lastAnnouncedDatesByUser[userId] = localToday.isoDate;
   }
@@ -2517,8 +2530,8 @@ function createHelpEmbed() {
             inline: false,
           },
           {
-            name: '!birthdayset / !birthdaytimezone / !birthdayremove / !birthdayshow / !birthdaychannel',
-            value: 'Lets members register their birthday and time zone, check what is saved, and lets staff choose where Jarvis should post birthday messages.',
+            name: '!birthdayset / !birthdaytimezone / !birthdayremove / !birthdayshow / !birthdaychannel / !birthdaymessage',
+            value: 'Lets members register their birthday and time zone, check what is saved, and lets staff choose where Jarvis should post birthday messages or a custom birthday message.',
             inline: false,
           },
               {
@@ -3444,6 +3457,28 @@ client.on('messageCreate', async (message) => {
     saveBirthdayState();
 
     return message.reply(`Jarvis will now post birthday messages in ${targetChannel}.`);
+  }
+
+  if (command === '!birthdaymessage') {
+    if (!isAdminMember(message.member)) {
+      return message.reply('Only Executive Officers and The Mechanic can set a custom birthday message.');
+    }
+
+    const targetUser = message.mentions.users.first();
+    const separatorIndex = message.content.indexOf('|');
+
+    if (!targetUser || separatorIndex === -1) {
+      return message.reply('Use: !birthdaymessage @user | your custom birthday message');
+    }
+
+    const customMessage = message.content.slice(separatorIndex + 1).trim();
+
+    if (!customMessage) {
+      return message.reply('Please provide the custom birthday message after the `|` separator.');
+    }
+
+    setBirthdayCustomMessage(targetUser.id, customMessage);
+    return message.reply(`Saved a custom birthday message for ${targetUser}.`);
   }
 
   if (command === '!birthdayshow') {
