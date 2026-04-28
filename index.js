@@ -63,14 +63,18 @@ const PSN_REGISTRATIONS_FILE = path.join(DATA_DIR, 'psn-registrations.json');
 const SESSION_REGISTRATIONS_FILE = path.join(DATA_DIR, 'session-registrations.json');
 const WHEELS_FILE = path.join(DATA_DIR, 'wheels.json');
 const SPOTIFY_PLAYLIST_STATE_FILE = path.join(DATA_DIR, 'spotify-playlist.json');
+const BIRTHDAYS_FILE = path.join(DATA_DIR, 'birthdays.json');
+const BIRTHDAY_STATE_FILE = path.join(DATA_DIR, 'birthday-state.json');
 const PLAYSTATION_NEWS_STATE_FILE = path.join(DATA_DIR, 'playstation-news-state.json');
 const PLAYSTATION_PLUS_STATE_FILE = path.join(DATA_DIR, 'playstation-plus-state.json');
 const SERVER_SHUTDOWNS_STATE_FILE = path.join(DATA_DIR, 'server-shutdowns-state.json');
 const PLAYSTATION_NEWS_POLL_INTERVAL_MS = 30 * 60 * 1000;
+const BIRTHDAY_CHECK_INTERVAL_MS = 60 * 60 * 1000;
 const SPOTIFY_CLIENT_ID = process.env.SPOTIFY_CLIENT_ID || '';
 const SPOTIFY_CLIENT_SECRET = process.env.SPOTIFY_CLIENT_SECRET || '';
 const SPOTIFY_REFRESH_TOKEN = process.env.SPOTIFY_REFRESH_TOKEN || '';
 const DEFAULT_SPOTIFY_PLAYLIST_NAME = process.env.SPOTIFY_PLAYLIST_NAME || 'No BS Trophy Huntin Community Playlist';
+const BIRTHDAY_TIMEZONE = process.env.BIRTHDAY_TIMEZONE || 'Europe/Oslo';
 const HUNTER_RANKS = [
   { name: 'Novice Hunter', min: 1, max: 99 },
   { name: 'Rising Hunter', min: 100, max: 199 },
@@ -89,6 +93,8 @@ let psnRegistrations = loadPsnRegistrations();
 let sessionRegistrations = loadSessionRegistrations();
 let wheels = loadWheels();
 let spotifyPlaylistState = loadSpotifyPlaylistState();
+let birthdays = loadBirthdays();
+let birthdayState = loadBirthdayState();
 let spotifyAccessTokenCache = null;
 
 function ensureDataDirectory() {
@@ -250,6 +256,66 @@ function saveSpotifyPlaylistState(state) {
     fs.writeFileSync(SPOTIFY_PLAYLIST_STATE_FILE, JSON.stringify(spotifyPlaylistState, null, 2));
   } catch (error) {
     console.error('Failed to save Spotify playlist state:', error.message);
+  }
+}
+
+function loadBirthdays() {
+  try {
+    ensureDataDirectory();
+
+    if (!fs.existsSync(BIRTHDAYS_FILE)) {
+      return {};
+    }
+
+    const raw = fs.readFileSync(BIRTHDAYS_FILE, 'utf8');
+    return raw ? JSON.parse(raw) : {};
+  } catch (error) {
+    console.error('Failed to load birthdays:', error.message);
+    return {};
+  }
+}
+
+function saveBirthdays() {
+  try {
+    ensureDataDirectory();
+    fs.writeFileSync(BIRTHDAYS_FILE, JSON.stringify(birthdays, null, 2));
+  } catch (error) {
+    console.error('Failed to save birthdays:', error.message);
+  }
+}
+
+function loadBirthdayState() {
+  try {
+    ensureDataDirectory();
+
+    if (!fs.existsSync(BIRTHDAY_STATE_FILE)) {
+      return {
+        announcementChannelId: null,
+        lastAnnouncedDatesByUser: {},
+      };
+    }
+
+    const raw = fs.readFileSync(BIRTHDAY_STATE_FILE, 'utf8');
+    const parsed = raw ? JSON.parse(raw) : {};
+    return {
+      announcementChannelId: parsed.announcementChannelId || null,
+      lastAnnouncedDatesByUser: parsed.lastAnnouncedDatesByUser || {},
+    };
+  } catch (error) {
+    console.error('Failed to load birthday state:', error.message);
+    return {
+      announcementChannelId: null,
+      lastAnnouncedDatesByUser: {},
+    };
+  }
+}
+
+function saveBirthdayState() {
+  try {
+    ensureDataDirectory();
+    fs.writeFileSync(BIRTHDAY_STATE_FILE, JSON.stringify(birthdayState, null, 2));
+  } catch (error) {
+    console.error('Failed to save birthday state:', error.message);
   }
 }
 
@@ -1773,6 +1839,204 @@ async function addTrackToSpotifyPlaylist(query, playlistName) {
   };
 }
 
+function getBirthdayMonthDayKey(month, day) {
+  return `${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+}
+
+function formatBirthdayDisplay({ day, month, year }) {
+  const dayText = String(day).padStart(2, '0');
+  const monthText = String(month).padStart(2, '0');
+  return year ? `${dayText}-${monthText}-${year}` : `${dayText}-${monthText}`;
+}
+
+function isValidTimezone(timeZone) {
+  try {
+    Intl.DateTimeFormat('en-GB', { timeZone }).format(new Date());
+    return true;
+  } catch (error) {
+    return false;
+  }
+}
+
+function normalizeTimezoneInput(input) {
+  const trimmed = normalizeText(input).trim();
+  return trimmed || null;
+}
+
+function isValidBirthdayDate(day, month, year = 2000) {
+  const date = new Date(Date.UTC(year, month - 1, day));
+  return date.getUTCFullYear() === year
+    && date.getUTCMonth() === month - 1
+    && date.getUTCDate() === day;
+}
+
+function parseBirthdayInput(input) {
+  const trimmed = normalizeText(input);
+
+  if (!trimmed) {
+    return null;
+  }
+
+  const isoMatch = trimmed.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+
+  if (isoMatch) {
+    const [, yearText, monthText, dayText] = isoMatch;
+    const day = Number(dayText);
+    const month = Number(monthText);
+    const year = Number(yearText);
+
+    if (!isValidBirthdayDate(day, month, year)) {
+      return null;
+    }
+
+    return { day, month, year };
+  }
+
+  const dayMonthMatch = trimmed.match(/^(\d{1,2})[./-](\d{1,2})(?:[./-](\d{2,4}))?$/);
+
+  if (!dayMonthMatch) {
+    return null;
+  }
+
+  const [, dayText, monthText, yearText] = dayMonthMatch;
+  const day = Number(dayText);
+  const month = Number(monthText);
+  const year = yearText ? Number(yearText) : null;
+  const validationYear = year || 2000;
+
+  if (!isValidBirthdayDate(day, month, validationYear)) {
+    return null;
+  }
+
+  return {
+    day,
+    month,
+    year,
+  };
+}
+
+function setBirthdayRegistration(member, birthday) {
+  const existing = birthdays[member.id] || {};
+  birthdays[member.id] = {
+    discordTag: member.user.tag,
+    day: birthday.day,
+    month: birthday.month,
+    year: birthday.year || null,
+    timeZone: existing.timeZone || null,
+    updatedAt: new Date().toISOString(),
+  };
+  saveBirthdays();
+}
+
+function setBirthdayTimezone(member, timeZone) {
+  const existing = birthdays[member.id] || {};
+  birthdays[member.id] = {
+    discordTag: member.user.tag,
+    day: existing.day || null,
+    month: existing.month || null,
+    year: existing.year || null,
+    timeZone,
+    updatedAt: new Date().toISOString(),
+  };
+  saveBirthdays();
+}
+
+function removeBirthdayRegistration(userId) {
+  if (!birthdays[userId]) {
+    return false;
+  }
+
+  delete birthdays[userId];
+  saveBirthdays();
+  return true;
+}
+
+function getCurrentBirthdayDateParts(timeZone = BIRTHDAY_TIMEZONE) {
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(new Date());
+
+  const year = Number(parts.find((part) => part.type === 'year')?.value);
+  const month = Number(parts.find((part) => part.type === 'month')?.value);
+  const day = Number(parts.find((part) => part.type === 'day')?.value);
+
+  return {
+    year,
+    month,
+    day,
+    isoDate: `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`,
+    monthDayKey: getBirthdayMonthDayKey(month, day),
+  };
+}
+
+async function checkAndPostBirthdays() {
+  if (!birthdayState.announcementChannelId) {
+    return;
+  }
+
+  const channel = await client.channels.fetch(birthdayState.announcementChannelId).catch(() => null);
+
+  if (!channel || !channel.isTextBased()) {
+    throw new Error('The birthday announcement channel could not be found or is not a text channel.');
+  }
+
+  const today = getCurrentBirthdayDateParts();
+  const entries = Object.entries(birthdays)
+    .filter(([, birthday]) => birthday.day && birthday.month && birthday.timeZone)
+    .filter(([, birthday]) => {
+      const localToday = getCurrentBirthdayDateParts(birthday.timeZone);
+      return getBirthdayMonthDayKey(birthday.month, birthday.day) === localToday.monthDayKey;
+    })
+    .filter(([userId, birthday]) => {
+      const localToday = getCurrentBirthdayDateParts(birthday.timeZone);
+      return birthdayState.lastAnnouncedDatesByUser[userId] !== localToday.isoDate;
+    });
+
+  if (!entries.length) {
+    return;
+  }
+
+  const mentions = entries.map(([userId]) => `<@${userId}>`).join(' ');
+  const birthdayCount = entries.length;
+  const timezoneList = [...new Set(entries.map(([, birthday]) => birthday.timeZone).filter(Boolean))];
+  const description = birthdayCount === 1
+    ? `Happy Birthday to ${mentions}! Wishing you a fantastic day, plenty of good vibes, and an even better year ahead.`
+    : `Happy Birthday to ${mentions}! Wishing all of you a fantastic day, plenty of good vibes, and an even better year ahead.`;
+
+  await channel.send({
+    embeds: [
+      {
+        color: 0xff7bbf,
+        title: 'Birthday Celebration',
+        description,
+        fields: timezoneList.length
+          ? [
+              {
+                name: 'Birthday Time Zone',
+                value: timezoneList.join(', '),
+                inline: false,
+              },
+            ]
+          : undefined,
+        footer: {
+          text: 'Jarvis | Birthday Wishes',
+        },
+        timestamp: new Date().toISOString(),
+      },
+    ],
+  });
+
+  for (const [userId, birthday] of entries) {
+    const localToday = getCurrentBirthdayDateParts(birthday.timeZone);
+    birthdayState.lastAnnouncedDatesByUser[userId] = localToday.isoDate;
+  }
+
+  saveBirthdayState();
+}
+
 function saveUserPsnRegistration(member, username, platinumCount, trophyLevel = null) {
   psnRegistrations[member.id] = {
     discordTag: member.user.tag,
@@ -2250,6 +2514,11 @@ function createHelpEmbed() {
           {
             name: '!playlistsetup / !songadd / !playlistlink / !spotifydebug',
             value: 'Creates the server Spotify playlist, adds songs to it, shows the playlist link, and provides admin-only Spotify config diagnostics.',
+            inline: false,
+          },
+          {
+            name: '!birthdayset / !birthdaytimezone / !birthdayremove / !birthdayshow / !birthdaychannel',
+            value: 'Lets members register their birthday and time zone, check what is saved, and lets staff choose where Jarvis should post birthday messages.',
             inline: false,
           },
               {
@@ -2744,6 +3013,14 @@ client.once('clientReady', () => {
         `Error: ${error.message}`
       );
     });
+
+    checkAndPostBirthdays().catch(async (error) => {
+      console.error('Initial birthday check failed:', error.message);
+      await notifyOwner(
+        'birthday init failed',
+        `Error: ${error.message}`
+      );
+    });
   }, 5000);
 
   setInterval(() => {
@@ -2775,6 +3052,16 @@ client.once('clientReady', () => {
       );
     });
   }, PLAYSTATION_NEWS_POLL_INTERVAL_MS);
+
+  setInterval(() => {
+    checkAndPostBirthdays().catch(async (error) => {
+      console.error('Birthday poll failed:', error.message);
+      await notifyOwner(
+        'birthday poll failed',
+        `Error: ${error.message}`
+      );
+    });
+  }, BIRTHDAY_CHECK_INTERVAL_MS);
 });
 
 client.on('messageReactionAdd', async (reaction, user) => {
@@ -3084,6 +3371,94 @@ client.on('messageCreate', async (message) => {
         },
       ],
     });
+  }
+
+  if (command === '!birthdayset') {
+    const input = message.content.slice(command.length).trim();
+
+    if (!input) {
+      return message.reply('Use: !birthdayset <DD-MM> or !birthdayset <YYYY-MM-DD>');
+    }
+
+    const parsedBirthday = parseBirthdayInput(input);
+
+    if (!parsedBirthday) {
+      return message.reply('I could not read that birthday. Use `DD-MM` or `YYYY-MM-DD`.');
+    }
+
+    setBirthdayRegistration(message.member, parsedBirthday);
+
+    const savedTimezone = birthdays[message.author.id]?.timeZone;
+    return message.reply(
+      savedTimezone
+        ? `Your birthday has been saved as **${formatBirthdayDisplay(parsedBirthday)}** with timezone **${savedTimezone}**. Jarvis will celebrate you when the day comes.`
+        : `Your birthday has been saved as **${formatBirthdayDisplay(parsedBirthday)}**. Now set your timezone with \`!birthdaytimezone <Area/City>\`, for example \`!birthdaytimezone Europe/Oslo\`.`
+    );
+  }
+
+  if (command === '!birthdaytimezone') {
+    const input = message.content.slice(command.length).trim();
+
+    if (!input) {
+      return message.reply('Use: !birthdaytimezone <Area/City> — for example `!birthdaytimezone Europe/Oslo` or `!birthdaytimezone America/New_York`.');
+    }
+
+    const timeZone = normalizeTimezoneInput(input);
+
+    if (!timeZone || !isValidTimezone(timeZone)) {
+      return message.reply('That timezone is not valid. Please use a full IANA timezone like `Europe/Oslo`, `America/New_York`, `Europe/London`, or `Australia/Sydney`.');
+    }
+
+    setBirthdayTimezone(message.member, timeZone);
+
+    const savedBirthday = birthdays[message.author.id];
+    return message.reply(
+      savedBirthday?.day && savedBirthday?.month
+        ? `Your birthday timezone has been saved as **${timeZone}**. Jarvis will now use that together with your saved birthday **${formatBirthdayDisplay(savedBirthday)}**.`
+        : `Your birthday timezone has been saved as **${timeZone}**. Now set your birthday with \`!birthdayset <DD-MM>\`.`
+    );
+  }
+
+  if (command === '!birthdayremove') {
+    const removed = removeBirthdayRegistration(message.author.id);
+
+    if (!removed) {
+      return message.reply('You do not currently have a saved birthday registration.');
+    }
+
+    return message.reply('Your birthday registration has been removed.');
+  }
+
+  if (command === '!birthdaychannel') {
+    if (!isAdminMember(message.member)) {
+      return message.reply('Only Executive Officers and The Mechanic can set the birthday channel.');
+    }
+
+    const targetChannel = message.mentions.channels.first();
+
+    if (!targetChannel || !targetChannel.isTextBased()) {
+      return message.reply('Use: !birthdaychannel #channel');
+    }
+
+    birthdayState.announcementChannelId = targetChannel.id;
+    saveBirthdayState();
+
+    return message.reply(`Jarvis will now post birthday messages in ${targetChannel}.`);
+  }
+
+  if (command === '!birthdayshow') {
+    const targetUser = message.mentions.users.first() || message.author;
+    const birthday = birthdays[targetUser.id];
+
+    if (!birthday) {
+      return message.reply(targetUser.id === message.author.id
+        ? 'You do not have a saved birthday registration yet.'
+        : `${targetUser} does not have a saved birthday registration yet.`);
+    }
+
+    return message.reply(targetUser.id === message.author.id
+      ? `Your saved birthday is **${formatBirthdayDisplay(birthday)}**${birthday.timeZone ? ` and your timezone is **${birthday.timeZone}**` : ''}.`
+      : `${targetUser}'s saved birthday is **${formatBirthdayDisplay(birthday)}**${birthday.timeZone ? ` and their timezone is **${birthday.timeZone}**` : ''}.`);
   }
 
   if (command === '!spotifydebug') {
