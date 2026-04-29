@@ -2021,6 +2021,10 @@ async function checkAndPostBirthdays() {
       : `Happy Birthday to ${mention}! Wishing you a fantastic day, plenty of good vibes, and an even better year ahead.`;
 
     await channel.send({
+      content: mention,
+      allowedMentions: {
+        users: [userId],
+      },
       embeds: [
         {
           color: 0xff7bbf,
