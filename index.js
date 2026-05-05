@@ -292,6 +292,7 @@ function loadBirthdayState() {
       return {
         announcementChannelId: null,
         lastAnnouncedDatesByUser: {},
+        skipNextByUser: {},
       };
     }
 
@@ -300,12 +301,14 @@ function loadBirthdayState() {
     return {
       announcementChannelId: parsed.announcementChannelId || null,
       lastAnnouncedDatesByUser: parsed.lastAnnouncedDatesByUser || {},
+      skipNextByUser: parsed.skipNextByUser || {},
     };
   } catch (error) {
     console.error('Failed to load birthday state:', error.message);
     return {
       announcementChannelId: null,
       lastAnnouncedDatesByUser: {},
+      skipNextByUser: {},
     };
   }
 }
@@ -2015,6 +2018,14 @@ async function checkAndPostBirthdays() {
   }
 
   for (const [userId, birthday] of entries) {
+    const localToday = getCurrentBirthdayDateParts(birthday.timeZone);
+
+    if (birthdayState.skipNextByUser?.[userId]) {
+      delete birthdayState.skipNextByUser[userId];
+      birthdayState.lastAnnouncedDatesByUser[userId] = localToday.isoDate;
+      continue;
+    }
+
     const mention = `<@${userId}>`;
     const description = birthday.customMessage
       ? birthday.customMessage
@@ -2047,7 +2058,6 @@ async function checkAndPostBirthdays() {
       ],
     });
 
-    const localToday = getCurrentBirthdayDateParts(birthday.timeZone);
     birthdayState.lastAnnouncedDatesByUser[userId] = localToday.isoDate;
   }
 
@@ -2534,8 +2544,8 @@ function createHelpEmbed() {
             inline: false,
           },
           {
-            name: '!birthdayset / !birthdaytimezone / !birthdayremove / !birthdayshow / !birthdaychannel / !birthdaymessage',
-            value: 'Lets members register their birthday and time zone, check what is saved, and lets staff choose where Jarvis should post birthday messages or a custom birthday message.',
+            name: '!birthdayset / !birthdaytimezone / !birthdayremove / !birthdayshow / !birthdaychannel / !birthdaymessage / !birthdayskip',
+            value: 'Lets members register their birthday and time zone, check what is saved, and lets staff choose where Jarvis should post birthday messages, save a custom birthday message, or skip the next one.',
             inline: false,
           },
               {
@@ -3483,6 +3493,24 @@ client.on('messageCreate', async (message) => {
 
     setBirthdayCustomMessage(targetUser.id, customMessage);
     return message.reply(`Saved a custom birthday message for ${targetUser}.`);
+  }
+
+  if (command === '!birthdayskip') {
+    if (!isAdminMember(message.member)) {
+      return message.reply('Only Executive Officers and The Mechanic can skip a birthday message.');
+    }
+
+    const targetUser = message.mentions.users.first();
+
+    if (!targetUser) {
+      return message.reply('Use: !birthdayskip @user');
+    }
+
+    birthdayState.skipNextByUser = birthdayState.skipNextByUser || {};
+    birthdayState.skipNextByUser[targetUser.id] = true;
+    saveBirthdayState();
+
+    return message.reply(`Jarvis will skip the next birthday post for ${targetUser}.`);
   }
 
   if (command === '!birthdayshow') {
