@@ -881,6 +881,36 @@ async function parseSpecificPlatHubTrophyFromPage(page, targetPlatinumNumber) {
   return null;
 }
 
+async function extractFocusedPlatHubEarnedDate(page) {
+  const earnedDate = await page.locator('span').evaluateAll((elements) => {
+    const text = (value) => (value || '').replace(/\s+/g, ' ').trim();
+
+    for (const element of elements) {
+      if (text(element.textContent) !== 'Earned On') {
+        continue;
+      }
+
+      const valueElement = element.parentElement?.querySelector('span.text-sm.font-bold.text-center.text-foreground');
+      const valueText = text(valueElement?.textContent);
+
+      if (valueText) {
+        return valueText;
+      }
+
+      const sibling = element.nextElementSibling;
+      const siblingText = text(sibling?.textContent);
+
+      if (siblingText) {
+        return siblingText;
+      }
+    }
+
+    return null;
+  }).catch(() => null);
+
+  return earnedDate || null;
+}
+
 async function focusSpecificPlatHubTrophyCard(page, gameName, platinumNumber) {
   const candidateLocators = [
     page.locator(`img[alt="${gameName}"]`),
@@ -1204,6 +1234,14 @@ async function fetchSpecificTrophy(username, platinumNumber) {
 
     if (!domTrophy && textTrophy?.gameName) {
       domTrophy = await focusSpecificPlatHubTrophyCard(page, textTrophy.gameName, platinumNumber);
+    }
+
+    if (domTrophy && !domTrophy.earnedDate) {
+      const focusedEarnedDate = await extractFocusedPlatHubEarnedDate(page);
+
+      if (focusedEarnedDate) {
+        domTrophy.earnedDate = focusedEarnedDate;
+      }
     }
 
     const trophy = domTrophy || textTrophy;
