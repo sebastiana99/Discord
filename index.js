@@ -832,6 +832,77 @@ function parseSpecificPlatHubTrophyFromHtml(html, targetPlatinumNumber) {
   return null;
 }
 
+async function parseSpecificPlatHubTrophyFromPage(page, targetPlatinumNumber) {
+  const cards = await page.locator('[data-slot="card"]').evaluateAll((elements) =>
+    elements.map((card) => {
+      const text = (value) => (value || '').replace(/\s+/g, ' ').trim();
+      const username = text(card.querySelector('span.text-xl.font-bold')?.textContent);
+      const platinumNumberText = text(card.querySelector('span.text-xs.font-semibold')?.textContent);
+      const gameName = text(card.querySelector('h3')?.textContent);
+      const platform = text(card.querySelector('p.text-muted-foreground')?.textContent);
+      const images = Array.from(card.querySelectorAll('img[alt]')).map((img) => ({
+        alt: text(img.getAttribute('alt')),
+        src: img.getAttribute('src') || '',
+      }));
+      const avatar = images.find((image) => image.alt && image.alt === username);
+      const gameImage = images.find((image) => image.alt && image.alt !== username && image.alt !== 'Platinum');
+      const spans = Array.from(card.querySelectorAll('span')).map((span) => text(span.textContent)).filter(Boolean);
+
+      let earnedDate = null;
+      let rarity = null;
+
+      for (let index = 0; index < spans.length; index += 1) {
+        if (spans[index] === 'Earned On') {
+          earnedDate = spans[index + 1] || null;
+        }
+
+        if (spans[index] === 'PSN Rarity') {
+          rarity = spans[index + 1] || null;
+        }
+      }
+
+      return {
+        username,
+        platinumNumberText,
+        gameName,
+        platform,
+        trophyIcon: avatar?.src || null,
+        gameImage: gameImage?.src || null,
+        earnedDate,
+        rarity,
+      };
+    })
+  ).catch(() => []);
+
+  for (const card of cards) {
+    const platinumNumber = Number.parseInt((card.platinumNumberText || '').replace('#', ''), 10);
+
+    if (platinumNumber !== targetPlatinumNumber) {
+      continue;
+    }
+
+    if (!card.gameName || !card.platform) {
+      continue;
+    }
+
+    return {
+      username: card.username || null,
+      trophyName: card.gameName,
+      gameName: card.gameName,
+      platform: card.platform,
+      earnedDate: card.earnedDate || null,
+      rarity: card.rarity || 'Not available',
+      trophyType: 'Platinum',
+      platinumNumber: `#${targetPlatinumNumber}`,
+      trophyIcon: absolutizePlatHubUrl(card.trophyIcon),
+      gameImage: absolutizePlatHubUrl(card.gameImage),
+      matchedPattern: card.platinumNumberText || null,
+    };
+  }
+
+  return null;
+}
+
 function parsePlatHubPlatinumTitlesFromText(bodyText) {
   const normalizedText = normalizeText(bodyText);
   const trimmedHistory = normalizedText.replace(/^.*?LEVEL\s+\d{1,4}\s+\d{1,5}\s+\d{1,5}\s+\d{1,5}\s+\d{1,5}\s+\d{1,6}\s*/i, '');
@@ -1094,9 +1165,8 @@ async function fetchSpecificTrophy(username, platinumNumber) {
     await page.waitForTimeout(3000);
 
     const title = await page.title();
-    const html = await page.content();
     const bodyText = await page.locator('body').innerText().catch(() => '');
-    const domTrophy = parseSpecificPlatHubTrophyFromHtml(html, platinumNumber);
+    const domTrophy = await parseSpecificPlatHubTrophyFromPage(page, platinumNumber);
     const textTrophy = parseSpecificPlatHubTrophyFromText(bodyText, platinumNumber);
     const trophy = domTrophy || textTrophy;
 
