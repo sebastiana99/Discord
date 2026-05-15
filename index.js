@@ -919,19 +919,32 @@ async function focusSpecificPlatHubTrophyCard(page, gameName, platinumNumber) {
 
     for (let index = 0; index < count; index += 1) {
       const candidate = locator.nth(index);
+      const clickTargets = [
+        candidate,
+        candidate.locator('xpath=ancestor::*[self::button or @role="button" or self::a][1]'),
+        candidate.locator('xpath=ancestor::div[1]'),
+      ];
 
-      try {
-        await candidate.scrollIntoViewIfNeeded().catch(() => null);
-        await candidate.click({ timeout: 2000 });
-        await page.waitForTimeout(1000);
+      for (const clickTarget of clickTargets) {
+        try {
+          const targetCount = await clickTarget.count().catch(() => 0);
 
-        const parsed = await parseSpecificPlatHubTrophyFromPage(page, platinumNumber);
+          if (!targetCount) {
+            continue;
+          }
 
-        if (parsed) {
-          return parsed;
+          await clickTarget.first().scrollIntoViewIfNeeded().catch(() => null);
+          await clickTarget.first().click({ timeout: 2500, force: true });
+          await page.waitForTimeout(1200);
+
+          const parsed = await parseSpecificPlatHubTrophyFromPage(page, platinumNumber);
+
+          if (parsed) {
+            return parsed;
+          }
+        } catch (error) {
+          continue;
         }
-      } catch (error) {
-        continue;
       }
     }
   }
