@@ -767,11 +767,11 @@ function parseSpecificPlatHubTrophyFromText(bodyText, targetPlatinumNumber) {
 
 function parseSpecificPlatHubTrophyFromHtml(html, targetPlatinumNumber) {
   const $ = cheerio.load(html);
-  const cards = $('[data-slot="card"]').toArray();
+  const tiles = $('div.flex.flex-col.items-center.text-center').toArray();
 
-  for (const cardElement of cards) {
-    const card = $(cardElement);
-    const platinumNumberText = normalizeText(card.find('span.text-xs.font-semibold').first().text());
+  for (const tileElement of tiles) {
+    const tile = $(tileElement);
+    const platinumNumberText = normalizeText(tile.find('span[title="Platinum Count"]').first().text());
 
     if (!platinumNumberText) {
       continue;
@@ -783,47 +783,25 @@ function parseSpecificPlatHubTrophyFromHtml(html, targetPlatinumNumber) {
       continue;
     }
 
-    const username = normalizeText(card.find('span.text-xl.font-bold').first().text()) || null;
-    const gameName = normalizeText(card.find('h3').first().text()) || null;
-    const platform = normalizeText(card.find('p.text-muted-foreground').first().text()) || null;
-    const avatarUrl = absolutizePlatHubUrl(card.find(`img[alt="${username}"]`).first().attr('src'));
-    const gameImageEl = card.find('img[alt]').filter((_, element) => {
-      const alt = $(element).attr('alt');
-      return alt && alt !== username && alt !== 'Platinum';
-    }).first();
-    const gameImage = absolutizePlatHubUrl(gameImageEl.attr('src'));
-
-    let earnedDate = null;
-    let rarity = null;
-
-    card.find('div').each((_, element) => {
-      const section = $(element);
-      const label = normalizeText(section.find('span').first().text());
-      const value = normalizeText(section.find('span').last().text());
-
-      if (label === 'Earned On') {
-        earnedDate = value;
-      }
-
-      if (label === 'PSN Rarity') {
-        rarity = value;
-      }
-    });
+    const gameName = normalizeText(tile.find('p[title]').first().attr('title') || tile.find('p').first().text()) || null;
+    const platform = normalizeText(tile.find('span').eq(0).text()) || null;
+    const rarity = normalizeText(tile.find('span[title="Platinum Earned Rate"]').first().text()) || null;
+    const gameImage = absolutizePlatHubUrl(tile.find('img[alt]').first().attr('src'));
 
     if (!gameName || !platform) {
       continue;
     }
 
     return {
-      username,
+      username: null,
       trophyName: gameName,
       gameName,
       platform,
-      earnedDate,
+      earnedDate: null,
       rarity: rarity || 'Not available',
       trophyType: 'Platinum',
       platinumNumber: `#${targetPlatinumNumber}`,
-      trophyIcon: avatarUrl,
+      trophyIcon: null,
       gameImage,
       matchedPattern: platinumNumberText,
     };
@@ -1214,8 +1192,14 @@ async function fetchSpecificTrophy(username, platinumNumber) {
     await page.waitForTimeout(3000);
 
     const title = await page.title();
+    const html = await page.content();
     const bodyText = await page.locator('body').innerText().catch(() => '');
-    let domTrophy = await parseSpecificPlatHubTrophyFromPage(page, platinumNumber);
+    let domTrophy = parseSpecificPlatHubTrophyFromHtml(html, platinumNumber);
+
+    if (!domTrophy) {
+      domTrophy = await parseSpecificPlatHubTrophyFromPage(page, platinumNumber);
+    }
+
     const textTrophy = parseSpecificPlatHubTrophyFromText(bodyText, platinumNumber);
 
     if (!domTrophy && textTrophy?.gameName) {
