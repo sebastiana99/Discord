@@ -1175,7 +1175,111 @@ async function fetchLatestTrophy(username) {
   }
 }
 
+function parsePlatHubPlatsStream(streamText) {
+  if (!streamText || typeof streamText !== 'string') {
+    return [];
+  }
+
+  const lines = streamText.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    try {
+      const parsed = JSON.parse(lines[index]);
+
+      if (parsed?.type === 'complete' && Array.isArray(parsed.plattedGames)) {
+        return parsed.plattedGames;
+      }
+    } catch (error) {
+      continue;
+    }
+  }
+
+  return [];
+}
+
+function mapPlatHubApiGameToTrophy(game, platinumNumber, latestPlatUrl) {
+  if (!game?.name || !game?.platform) {
+    return null;
+  }
+
+  const rarity = typeof game.platRarityPercent === 'number'
+    ? `${game.platRarityPercent.toFixed(1)}%`
+    : 'Not available';
+
+  const earnedDate = game.platEarnedDate
+    ? new Intl.DateTimeFormat('en-US', {
+        weekday: 'short',
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric',
+        timeZone: 'UTC',
+      }).format(new Date(game.platEarnedDate))
+    : null;
+
+  return {
+    trophyName: game.name,
+    gameName: game.name,
+    platform: game.platform,
+    rarity,
+    earnedDate,
+    trophyType: 'Platinum',
+    platinumNumber: `#${platinumNumber}`,
+    trophyIcon: game.titleIconUrl || null,
+    gameImage: game.platinumIconUrl || null,
+    latestPlatUrl,
+    matchedPattern: game.npCommunicationId || null,
+  };
+}
+
+async function fetchSpecificTrophyFromPlatHubApi(username, platinumNumber) {
+  const url = `${PSN_PLATHUB_BASE_URL}/api/plats?psnId=${encodeURIComponent(username)}&stream=1`;
+  const response = await axios.get(url, {
+    timeout: 45000,
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+      Accept: 'application/json,text/plain,*/*',
+      'Accept-Language': 'en-US,en;q=0.9',
+      Referer: `${PSN_PLATHUB_BASE_URL}/mosaic?psnId=${encodeURIComponent(username)}`,
+    },
+  });
+
+  const games = parsePlatHubPlatsStream(response.data);
+
+  if (!games.length) {
+    return { kind: 'parse_error', provider: 'psnplathub', latestPlatUrl: `${PSN_PLATHUB_BASE_URL}/mosaic?psnId=${encodeURIComponent(username)}` };
+  }
+
+  const total = games.length;
+  const targetIndex = total - platinumNumber;
+
+  if (targetIndex < 0 || targetIndex >= total) {
+    return { kind: 'not_found' };
+  }
+
+  const mapped = mapPlatHubApiGameToTrophy(games[targetIndex], platinumNumber, `${PSN_PLATHUB_BASE_URL}/mosaic?psnId=${encodeURIComponent(username)}`);
+
+  if (!mapped) {
+    return { kind: 'parse_error', provider: 'psnplathub', latestPlatUrl: `${PSN_PLATHUB_BASE_URL}/mosaic?psnId=${encodeURIComponent(username)}` };
+  }
+
+  return {
+    kind: 'success',
+    trophy: mapped,
+    provider: 'psnplathub',
+  };
+}
+
 async function fetchSpecificTrophy(username, platinumNumber) {
+  try {
+    const apiResult = await fetchSpecificTrophyFromPlatHubApi(username, platinumNumber);
+
+    if (apiResult.kind === 'success' || apiResult.kind === 'not_found') {
+      return apiResult;
+    }
+  } catch (error) {
+    console.error('Specific trophy API lookup failed, falling back to page parse:', error.message);
+  }
+
   const browser = await getBrowser();
   const context = await browser.newContext({
     userAgent:
