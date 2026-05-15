@@ -903,6 +903,42 @@ async function parseSpecificPlatHubTrophyFromPage(page, targetPlatinumNumber) {
   return null;
 }
 
+async function focusSpecificPlatHubTrophyCard(page, gameName, platinumNumber) {
+  const candidateLocators = [
+    page.locator(`img[alt="${gameName}"]`),
+    page.locator(`text="${gameName}"`),
+    page.locator(`text="#${platinumNumber}"`),
+  ];
+
+  for (const locator of candidateLocators) {
+    const count = await locator.count().catch(() => 0);
+
+    if (!count) {
+      continue;
+    }
+
+    for (let index = 0; index < count; index += 1) {
+      const candidate = locator.nth(index);
+
+      try {
+        await candidate.scrollIntoViewIfNeeded().catch(() => null);
+        await candidate.click({ timeout: 2000 });
+        await page.waitForTimeout(1000);
+
+        const parsed = await parseSpecificPlatHubTrophyFromPage(page, platinumNumber);
+
+        if (parsed) {
+          return parsed;
+        }
+      } catch (error) {
+        continue;
+      }
+    }
+  }
+
+  return null;
+}
+
 function parsePlatHubPlatinumTitlesFromText(bodyText) {
   const normalizedText = normalizeText(bodyText);
   const trimmedHistory = normalizedText.replace(/^.*?LEVEL\s+\d{1,4}\s+\d{1,5}\s+\d{1,5}\s+\d{1,5}\s+\d{1,5}\s+\d{1,6}\s*/i, '');
@@ -1166,8 +1202,13 @@ async function fetchSpecificTrophy(username, platinumNumber) {
 
     const title = await page.title();
     const bodyText = await page.locator('body').innerText().catch(() => '');
-    const domTrophy = await parseSpecificPlatHubTrophyFromPage(page, platinumNumber);
+    let domTrophy = await parseSpecificPlatHubTrophyFromPage(page, platinumNumber);
     const textTrophy = parseSpecificPlatHubTrophyFromText(bodyText, platinumNumber);
+
+    if (!domTrophy && textTrophy?.gameName) {
+      domTrophy = await focusSpecificPlatHubTrophyCard(page, textTrophy.gameName, platinumNumber);
+    }
+
     const trophy = domTrophy || textTrophy;
 
     if (trophy) {
